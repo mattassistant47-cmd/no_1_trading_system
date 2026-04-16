@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["e2e: end-to-end tests (require full stack)"]
+addopts = "--tb=short -v"
+
+[tool.coverage.run]
+omit = ["tests/*", "frontend/*", "scripts/*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"

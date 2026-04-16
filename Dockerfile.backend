@@ -1,0 +1,40 @@
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY main.py .
+COPY config/ ./config/
+COPY core/ ./core/
+COPY api/ ./api/
+COPY brokers/ ./brokers/
+COPY data/ ./data/
+COPY strategies/ ./strategies/
+COPY risk/ ./risk/
+COPY evolution/ ./evolution/
+COPY agents/ ./agents/
+COPY scripts/ ./scripts/
+COPY tests/ ./tests/
+COPY pyproject.toml .
+
+RUN useradd -m -u 1000 appuser && \
+    mkdir -p /app/logs /app/test-reports && \
+    chown -R appuser:appuser /app
+USER appuser
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8000/api/health || exit 1
+
+EXPOSE 8000
+CMD ["python", "main.py"]

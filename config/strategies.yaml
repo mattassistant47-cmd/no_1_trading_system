@@ -1,0 +1,188 @@
+# No.1 Trading System - Strategy Configuration
+
+strategies:
+  momentum:
+    enabled: true
+    description: "Momentum-based trading strategy using price breakouts"
+    parameters:
+      lookback_period: 20        # Period for momentum calculation
+      momentum_threshold: 0.05   # Minimum momentum % to trigger signal
+      atr_period: 14             # Average True Range period
+      atr_multiplier: 2.0        # Stop loss distance in ATRs
+      min_volume_threshold: 1000000  # Minimum daily volume in USD
+    risk:
+      max_position_size_percent: 0.10
+      max_loss_percent: 0.02
+      stop_loss_atr_mult: 2.0
+      take_profit_ratio: 2.0     # 1:2 risk-reward ratio
+    allocation:
+      weight: 0.30               # 30% portfolio allocation
+      rebalance_frequency: "weekly"
+    lookback_bars: 252            # 1 year of daily data
+    min_holding_days: 5
+    max_holding_days: 60
+
+  mean_reversion:
+    enabled: true
+    description: "Mean reversion strategy for overbought/oversold conditions"
+    parameters:
+      window: 30                 # Rolling window for mean/std
+      z_score_threshold: 2.0     # Number of std deviations
+      rsi_period: 14             # RSI indicator period
+      rsi_oversold: 30           # RSI oversold threshold
+      rsi_overbought: 70         # RSI overbought threshold
+      min_price: 5.0             # Minimum stock price
+    risk:
+      max_position_size_percent: 0.10
+      max_loss_percent: 0.02
+      stop_loss_percent: 0.03
+      take_profit_percent: 0.05
+    allocation:
+      weight: 0.30               # 30% portfolio allocation
+      rebalance_frequency: "weekly"
+    lookback_bars: 252
+    min_holding_days: 2
+    max_holding_days: 30
+
+  crypto_momentum:
+    enabled: false
+    description: "Momentum strategy for cryptocurrency pairs"
+    parameters:
+      lookback_period: 14
+      momentum_threshold: 0.08
+      volume_multiplier: 1.5     # Relative to 20-day average
+      crypto_pairs:
+        - "BTC/USD"
+        - "ETH/USD"
+        - "SOL/USD"
+        - "XRP/USD"
+    risk:
+      max_position_size_percent: 0.05
+      max_loss_percent: 0.03
+      stop_loss_percent: 0.05
+      take_profit_ratio: 2.5
+    allocation:
+      weight: 0.20
+      rebalance_frequency: "daily"
+    lookback_bars: 100
+    min_holding_hours: 1
+    max_holding_hours: 72
+
+  options_wheel:
+    enabled: false
+    description: "Covered call and cash-secured put strategy"
+    parameters:
+      target_yield_percent: 0.05  # 5% monthly target
+      delta_call: 0.30            # Sell calls at 0.30 delta
+      delta_put: 0.25             # Sell puts at 0.25 delta
+      days_to_expiration: 30      # Trade ~30 DTE options
+      min_bid_ask_spread: 0.05    # 5¢ minimum spread
+    risk:
+      max_position_size_percent: 0.15
+      max_loss_percent: 0.10
+      collateral_percent: 1.0
+    allocation:
+      weight: 0.10
+      rebalance_frequency: "weekly"
+    universe:
+      - "SPY"
+      - "QQQ"
+      - "IWM"
+      - "AAPL"
+      - "MSFT"
+      - "TSLA"
+    min_holding_days: 7
+    max_holding_days: 45
+
+  polymarket:
+    enabled: false
+    description: "Prediction market trading on Polymarket"
+    parameters:
+      confidence_threshold: 0.55  # Must be >55% confident
+      min_probability_diff: 0.10  # 10% difference from market
+      max_order_value: 1000       # Max position size in USD
+      order_timeout_seconds: 30
+    risk:
+      max_position_size_percent: 0.05
+      max_loss_percent: 0.02
+    allocation:
+      weight: 0.10
+      rebalance_frequency: "daily"
+    market_categories:
+      - "politics"
+      - "crypto"
+      - "economics"
+      - "sports"
+    prediction_sources:
+      - "sentiment_analysis"
+      - "historical_data"
+      - "news_events"
+    min_liquidity_usd: 10000
+    min_holding_hours: 6
+    max_holding_days: 365
+
+# Global strategy settings
+global:
+  max_concurrent_positions: 20
+  min_correlation_check: true
+  correlation_threshold: 0.5
+  max_sector_allocation: 0.25
+
+  # Universe selection
+  universe:
+    type: "sp500"               # Use S&P 500 constituents
+    min_market_cap_b: 1.0       # $1B+ market cap
+    min_daily_volume_m: 10.0    # $10M+ daily volume
+    exclude_penny_stocks: true
+    exclude_etfs: false
+
+  # Data requirements
+  data:
+    min_history_days: 252       # 1 year minimum
+    bar_type: "daily"
+    price_adjustment: "split_dividend"
+
+  # Performance tracking
+  performance:
+    track_drawdown: true
+    track_sharpe: true
+    track_sortino: true
+    rebalance_frequency: "weekly"
+    performance_benchmark: "SPY"
+
+# Risk management across all strategies
+risk_management:
+  daily_loss_limit: 0.05       # 5% daily portfolio loss
+  monthly_loss_limit: 0.10     # 10% monthly portfolio loss
+  max_portfolio_leverage: 2.0
+  min_cash_percent: 0.05       # Always keep 5% cash
+  correlation_check:
+    enabled: true
+    max_correlated_positions: 3  # Max 3 highly correlated positions
+  sector_limits:
+    "Technology": 0.30
+    "Finance": 0.20
+    "Healthcare": 0.15
+    "Industrials": 0.15
+    "Energy": 0.10
+    "Consumer": 0.15
+    "Utilities": 0.10
+    "Materials": 0.10
+    "Real Estate": 0.10
+    "Other": 0.10
+
+# Backtesting configuration
+backtesting:
+  enabled: true
+  default_start_date: "2020-01-01"
+  default_end_date: "2024-12-31"
+  commission_percent: 0.001     # 0.1% per trade
+  slippage_percent: 0.0001      # 0.01%
+  initial_cash: 100000.0
+
+# Performance metrics thresholds
+metrics:
+  sharpe_ratio_target: 1.0
+  max_drawdown_percent: -0.20   # Max 20% drawdown
+  win_rate_threshold: 0.40      # 40% min win rate
+  profit_factor_threshold: 1.5  # Revenue/Loss ratio

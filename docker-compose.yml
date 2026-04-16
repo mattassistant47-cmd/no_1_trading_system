@@ -1,0 +1,128 @@
+version: '3.8'
+
+services:
+  # TimescaleDB - Time-series database optimized for high-frequency trading data
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: trading-db
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-trading}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_DB: ${DB_NAME:-trading_db}
+      # PostgreSQL tuning for ARM64 with 24GB RAM allocation
+      POSTGRES_INITDB_ARGS: >
+        -c shared_buffers=512MB
+        -c effective_cache_size=1GB
+        -c work_mem=4MB
+        -c maintenance_work_mem=64MB
+        -c random_page_cost=1.1
+        -c effective_io_concurrency=200
+        -c wal_buffers=16MB
+        -c min_wal_size=1GB
+        -c max_wal_size=4GB
+    ports:
+      - "5432:5432"
+    volumes:
+      # Named volume for persistent data across container restarts
+      - postgres_data:/var/lib/postgresql/data
+      # Backup directory
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-trading}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - trading-network
+
+  # FastAPI Backend - Trading system core logic
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading-app
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Database connection
+      DATABASE_URL: postgresql://${DB_USER:-trading}:${DB_PASSWORD:-changeme}@db:5432/${DB_NAME:-trading_db}
+
+      # Trading environment
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      ENV: ${ENV:-production}
+
+      # Application settings
+      API_KEY: ${API_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    volumes:
+      # Application logs
+      - ./logs:/app/logs
+      # Allow hot-reload of configs (optional)
+      - ./config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # Resource limits optimized for OCI free tier (4 CPU, 24GB RAM)
+    # Reserve 4GB for the app, leave 4GB for db and system
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    networks:
+      - trading-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Nginx - Reverse proxy and load balancer
+  nginx:
+    image: nginx:alpine
+    container_name: trading-nginx
+    restart: always
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      # Uncomment for HTTPS (requires SSL certificates)
+      # - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      # SSL certificates (uncomment when ready for HTTPS)
+      # - ./certs/cert.pem:/etc/nginx/certs/cert.pem:ro
+      # - ./certs/key.pem:/etc/nginx/certs/key.pem:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - trading-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  trading-network:
+    driver: bridge

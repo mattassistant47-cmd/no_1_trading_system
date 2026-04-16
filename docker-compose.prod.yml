@@ -1,0 +1,88 @@
+version: '3.8'
+
+networks:
+  trading-prod:
+    driver: bridge
+    name: trading-prod-network
+
+volumes:
+  db_prod_data:
+    name: trading-prod-db
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: trading-prod-db
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-trading_prod}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-trading_prod_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_prod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-trading_prod}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - trading-prod
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: trading-prod-backend
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${DB_USER:-trading_prod}:${DB_PASSWORD}@db:5432/${DB_NAME:-trading_prod_db}"
+      MODE: ${TRADING_MODE:-paper}
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      ALPACA_API_KEY_PAPER: ${ALPACA_API_KEY_PAPER}
+      ALPACA_API_SECRET_PAPER: ${ALPACA_API_SECRET_PAPER}
+      ALPACA_API_KEY_LIVE: ${ALPACA_API_KEY_LIVE:-}
+      ALPACA_API_SECRET_LIVE: ${ALPACA_API_SECRET_LIVE:-}
+      FRED_API_KEY: ${FRED_API_KEY}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
+    ports:
+      - "8000:8000"
+    command: ["python", "main.py", "--workers", "4"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - trading-prod
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: trading-prod-frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.prod.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - trading-prod
