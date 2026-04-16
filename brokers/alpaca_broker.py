@@ -126,7 +126,7 @@ class AlpacaBroker(BaseBroker):
             self.client = TradingClient(
                 api_key=self.api_key,
                 secret_key=self.secret_key,
-                base_url=self.base_url,
+                paper=self.paper_trading,
             )
             self.stock_data_client = StockHistoricalDataClient(
                 api_key=self.api_key,

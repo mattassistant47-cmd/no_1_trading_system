@@ -190,13 +190,13 @@ class TradingEngine:
             event_bus.subscribe(EventType.ORDER_FILLED, self._handle_fill_event)
             event_bus.subscribe(EventType.RISK_ALERT, self._handle_risk_alert)
 
-            # Start the scheduler
-            if self.scheduler:
-                self.scheduler.start()
-                logger.info("Scheduler started")
+            # Start background tasks instead of APScheduler
+            self._background_tasks = []
+            self.running = True
+            self._start_background_tasks()
+            logger.info("Background tasks started")
 
             logger.info("Trading engine initialization complete")
-            self.running = True
             self.start_time = datetime.utcnow()
 
         except Exception as e:
@@ -425,6 +425,52 @@ class TradingEngine:
     # Keep backward compat - old name pointed at position_manager dict
     async def _initialize_position_manager(self) -> None:
         await self._initialize_data_feed()
+
+    def _start_background_tasks(self):
+        """Start periodic background tasks using asyncio."""
+        async def _periodic(name, coro_func, interval_seconds):
+            """Run a coroutine periodically."""
+            logger.info(f"Background task '{name}' started (every {interval_seconds}s)")
+            await asyncio.sleep(5)  # initial delay
+            while self.running:
+                try:
+                    await coro_func()
+                except Exception as e:
+                    logger.error(f"Background task '{name}' error: {e}")
+                await asyncio.sleep(interval_seconds)
+
+        loop = asyncio.get_event_loop()
+
+        # Data sync
+        interval = getattr(settings.scheduler, 'data_sync_interval_seconds', 60)
+        if interval > 0:
+            task = loop.create_task(_periodic("data_sync", self._sync_market_data, interval))
+            self._background_tasks.append(task)
+
+        # Strategy checks
+        interval = getattr(settings.scheduler, 'strategy_check_interval_seconds', 300)
+        if interval > 0:
+            task = loop.create_task(_periodic("strategy_checks", self._run_strategy_checks, interval))
+            self._background_tasks.append(task)
+
+        # Risk checks
+        interval = getattr(settings.scheduler, 'risk_check_interval_seconds', 60)
+        if interval > 0:
+            task = loop.create_task(_periodic("risk_checks", self._run_risk_checks, interval))
+            self._background_tasks.append(task)
+
+        # Portfolio snapshots
+        task = loop.create_task(_periodic("portfolio_snapshot", self._take_portfolio_snapshot, 300))
+        self._background_tasks.append(task)
+
+        # Order fill checks
+        if self.order_executor:
+            task = loop.create_task(_periodic("fill_checks", self._check_order_fills, 30))
+            self._background_tasks.append(task)
+
+        # System health
+        task = loop.create_task(_periodic("health_check", self._system_health_check, 60))
+        self._background_tasks.append(task)
 
     async def _setup_scheduler(self) -> None:
         logger.info("Setting up scheduler...")

@@ -90,20 +90,42 @@ class AlpacaDataFeed:
                     timeframe=self._parse_timeframe(timeframe),
                     start=start,
                     end=end,
-                    adjustment=Adjustment.ADJUSTED,
                 )
-                bars = self.crypto_client.get_bar_data(request)
+                bars = self.crypto_client.get_crypto_bars(request)
             else:
+                from alpaca.data.enums import DataFeed
                 request = StockBarsRequest(
                     symbol_or_symbols=symbol,
                     timeframe=self._parse_timeframe(timeframe),
                     start=start,
                     end=end,
-                    adjustment=Adjustment.ADJUSTED,
+                    adjustment=Adjustment.ALL,
+                    feed=DataFeed.IEX,
                 )
-                bars = self.stock_client.get_bar_data(request)
+                bars = self.stock_client.get_stock_bars(request)
 
-            df = bars[symbol].df
+            # alpaca-py returns BarSet: dict-like of symbol -> list of Bar objects
+            try:
+                symbol_bars = bars[symbol]
+            except (KeyError, TypeError):
+                symbol_bars = bars[symbol.upper()] if hasattr(bars, '__getitem__') else []
+            if hasattr(symbol_bars, 'df'):
+                df = symbol_bars.df
+            else:
+                # Convert list of Bar objects to DataFrame
+                records = []
+                for bar in symbol_bars:
+                    records.append({
+                        "timestamp": bar.timestamp,
+                        "open": float(bar.open),
+                        "high": float(bar.high),
+                        "low": float(bar.low),
+                        "close": float(bar.close),
+                        "volume": float(bar.volume),
+                    })
+                df = pd.DataFrame(records)
+                if not df.empty and "timestamp" in df.columns:
+                    df.set_index("timestamp", inplace=True)
             logger.debug(f"Retrieved {len(df)} bars for {symbol}")
             return df
 
@@ -165,22 +187,22 @@ class AlpacaDataFeed:
 
     def _parse_timeframe(self, timeframe: str):
         """Parse timeframe string to Alpaca TimeFrame."""
-        from alpaca.data.enums import TimeFrame
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
         mapping = {
-            "1min": TimeFrame.MINUTE,
-            "5min": TimeFrame(5),
-            "15min": TimeFrame(15),
-            "30min": TimeFrame(30),
-            "1h": TimeFrame.HOUR,
-            "4h": TimeFrame(240),
-            "1d": TimeFrame.DAY,
-            "1w": TimeFrame.WEEK,
+            "1min": TimeFrame.Minute,
+            "5min": TimeFrame(5, TimeFrameUnit.Minute),
+            "15min": TimeFrame(15, TimeFrameUnit.Minute),
+            "30min": TimeFrame(30, TimeFrameUnit.Minute),
+            "1h": TimeFrame.Hour,
+            "4h": TimeFrame(4, TimeFrameUnit.Hour),
+            "1d": TimeFrame.Day,
+            "1w": TimeFrame.Week,
         }
 
         if timeframe not in mapping:
             logger.warning(f"Unknown timeframe: {timeframe}, defaulting to 1h")
-            return TimeFrame.HOUR
+            return TimeFrame.Hour
 
         return mapping[timeframe]
 

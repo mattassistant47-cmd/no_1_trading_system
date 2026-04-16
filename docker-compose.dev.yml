@@ -50,6 +50,7 @@ services:
       FRED_API_KEY: ${FRED_API_KEY:-test}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-devsecret}
       CORS_ORIGINS: "http://localhost:8080,http://localhost:5173"
+    command: ["python", "main.py", "--workers", "1", "--log-level", "DEBUG"]
     ports:
       - "8001:8000"
     healthcheck:

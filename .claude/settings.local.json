@@ -60,7 +60,14 @@
       "Bash(ssh-keyscan github.com)",
       "Skill(claude-md-management:revise-claude-md)",
       "Skill(claude-md-management:revise-claude-md:*)",
-      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/requirements.txt\" oci:/home/ubuntu/trading-bot/code/requirements.txt)"
+      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/requirements.txt\" oci:/home/ubuntu/trading-bot/code/requirements.txt)",
+      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/brokers/__init__.py\" oci:/home/ubuntu/trading-bot/code/brokers/__init__.py)",
+      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/brokers/alpaca_broker.py\" oci:/home/ubuntu/trading-bot/code/brokers/alpaca_broker.py)",
+      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/data/alpaca_feed.py\" oci:/home/ubuntu/trading-bot/code/data/alpaca_feed.py)",
+      "Bash(scp docker-compose.dev.yml oci:/home/ubuntu/trading-bot/code/docker-compose.dev.yml)",
+      "Bash(scp docker-compose.dev.yml oci:/home/ubuntu/trading-bot/dev/docker-compose.dev.yml)",
+      "Bash(scp data/alpaca_feed.py oci:/home/ubuntu/trading-bot/code/data/alpaca_feed.py)",
+      "Bash(scp brokers/__init__.py oci:/home/ubuntu/trading-bot/code/brokers/__init__.py)"
     ]
   }
 }
