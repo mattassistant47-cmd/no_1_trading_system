@@ -5,7 +5,7 @@ Operates 24/7 with different parameters for different trading sessions.
 
 from typing import List, Dict, Any, Optional
 import pandas as pd
-import pandas_ta as ta
+import strategies.indicators as ta
 import numpy as np
 from datetime import datetime, timedelta
 from loguru import logger

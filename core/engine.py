@@ -6,6 +6,7 @@ Handles broker initialization, strategy execution, and graceful shutdown.
 import asyncio
 import signal
 import sys
+import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -14,23 +15,48 @@ from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
 from config.settings import settings
-from core.database import DatabaseManager, init_db
-from core.events import event_bus, EventType
-from core.models import SystemLog
+from core.database import DatabaseManager, init_db, get_session
+from core.events import event_bus, EventType, Event
+from core.models import (
+    Order as DBOrder,
+    Trade as DBTrade,
+    Position as DBPosition,
+    PortfolioSnapshot,
+    Signal as DBSignal,
+    SystemLog,
+    OrderStatus as DBOrderStatus,
+    OrderSide as DBOrderSide,
+    SignalType,
+    PositionStatus,
+    TradeType,
+)
 
 
 class TradingEngine:
     """Main trading engine coordinating all components."""
 
     def __init__(self) -> None:
-        """Initialize the trading engine."""
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.running = False
         self.start_time: Optional[datetime] = None
         self.strategies: Dict[str, any] = {}
         self.brokers: Dict[str, any] = {}
         self.risk_manager: Optional[any] = None
+        self.position_sizer: Optional[any] = None
+        self.circuit_breaker: Optional[any] = None
+        self.data_feed: Optional[any] = None
+        self.order_executor: Optional[any] = None
         self.position_manager: Optional[any] = None
+
+        # Portfolio state
+        self._portfolio_value: float = settings.trading.initial_capital
+        self._cash: float = settings.trading.initial_capital
+        self._positions_value: float = 0.0
+        self._daily_pnl: float = 0.0
+        self._total_pnl: float = 0.0
+        self._initial_capital: float = settings.trading.initial_capital
+        self._open_positions: list = []
+        self._market_data: Dict[str, any] = {}
 
         try:
             log_path = getattr(settings.logging, 'log_file_path', '/app/logs/trading.log')
@@ -43,40 +69,54 @@ class TradingEngine:
         except (PermissionError, OSError) as e:
             logger.warning(f"Could not add file logger: {e}")
 
+    # ── Properties ──────────────────────────────────────────────────────
+
     @property
     def portfolio_value(self) -> float:
-        if self.position_manager:
-            return self.position_manager.get('initial_capital', 100000.0)
-        return 100000.0
+        return self._portfolio_value
 
     @property
     def cash(self) -> float:
-        return self.portfolio_value
+        return self._cash
 
     @property
     def daily_pnl(self) -> float:
-        return 0.0
+        return self._daily_pnl
 
     @property
     def total_pnl(self) -> float:
-        return 0.0
+        return self._total_pnl
 
     @property
     def total_pnl_percentage(self) -> float:
+        if self._initial_capital > 0:
+            return (self._total_pnl / self._initial_capital) * 100
         return 0.0
 
     @property
     def initial_capital(self) -> float:
-        if self.position_manager:
-            return self.position_manager.get('initial_capital', 100000.0)
-        return 100000.0
+        return self._initial_capital
 
     @property
     def win_rate(self) -> float:
+        for name, strategy in self.strategies.items():
+            try:
+                from strategies.base import BaseStrategy
+                if isinstance(strategy, BaseStrategy):
+                    return strategy.metrics.win_rate
+            except Exception:
+                pass
         return 0.0
 
     @property
     def sharpe_ratio(self) -> float:
+        for name, strategy in self.strategies.items():
+            try:
+                from strategies.base import BaseStrategy
+                if isinstance(strategy, BaseStrategy):
+                    return strategy.metrics.sharpe_ratio
+            except Exception:
+                pass
         return 0.0
 
     @property
@@ -85,10 +125,26 @@ class TradingEngine:
 
     @property
     def max_drawdown(self) -> float:
+        if self.risk_manager:
+            try:
+                from risk.manager import RiskManager
+                if isinstance(self.risk_manager, RiskManager):
+                    drawdown = (self.risk_manager.peak_equity - self.risk_manager.current_equity)
+                    if self.risk_manager.peak_equity > 0:
+                        return (drawdown / self.risk_manager.peak_equity) * 100
+            except Exception:
+                pass
         return 0.0
 
     @property
     def profit_factor(self) -> float:
+        for name, strategy in self.strategies.items():
+            try:
+                from strategies.base import BaseStrategy
+                if isinstance(strategy, BaseStrategy):
+                    return strategy.metrics.profit_factor
+            except Exception:
+                pass
         return 0.0
 
     @property
@@ -97,14 +153,15 @@ class TradingEngine:
 
     @property
     def open_positions(self) -> list:
-        return []
+        return self._open_positions
 
     @property
     def trading_mode(self) -> str:
         return settings.mode
 
+    # ── Initialization ──────────────────────────────────────────────────
+
     async def initialize(self) -> None:
-        """Initialize all system components."""
         logger.info("=" * 80)
         logger.info(f"Initializing {settings.app_name} v1.0.0")
         logger.info(f"Mode: {settings.mode.upper()}")
@@ -112,33 +169,34 @@ class TradingEngine:
         logger.info("=" * 80)
 
         try:
-            # Initialize database
             logger.info("Setting up database...")
             await DatabaseManager.init()
             await init_db()
             logger.info("Database initialized successfully")
 
-            # Connect event bus
             logger.info("Connecting event bus...")
             await event_bus.connect()
             logger.info("Event bus connected")
 
-            # Initialize brokers
             await self._initialize_brokers()
-
-            # Initialize strategies
             await self._initialize_strategies()
-
-            # Initialize risk manager
             await self._initialize_risk_manager()
-
-            # Initialize position manager
-            await self._initialize_position_manager()
-
-            # Setup scheduler
+            await self._initialize_data_feed()
+            await self._initialize_order_executor()
             await self._setup_scheduler()
 
+            # Wire event bus subscribers
+            event_bus.subscribe(EventType.SIGNAL_GENERATED, self._handle_signal_event)
+            event_bus.subscribe(EventType.ORDER_FILLED, self._handle_fill_event)
+            event_bus.subscribe(EventType.RISK_ALERT, self._handle_risk_alert)
+
+            # Start the scheduler
+            if self.scheduler:
+                self.scheduler.start()
+                logger.info("Scheduler started")
+
             logger.info("Trading engine initialization complete")
+            self.running = True
             self.start_time = datetime.utcnow()
 
         except Exception as e:
@@ -146,138 +204,233 @@ class TradingEngine:
             raise
 
     async def _initialize_brokers(self) -> None:
-        """Initialize broker connections."""
         logger.info("Initializing brokers...")
 
+        # Alpaca broker
         try:
-            # Alpaca broker
+            from brokers.alpaca_broker import AlpacaBroker
             api_key, api_secret, base_url = settings.get_alpaca_credentials()
-            logger.info(f"Alpaca broker initialized (Mode: {settings.mode})")
-            self.brokers["alpaca"] = {
-                "api_key": api_key,
-                "api_secret": api_secret,
-                "base_url": base_url,
-                "mode": settings.mode,
+            paper = settings.mode == "paper"
+
+            broker = AlpacaBroker(
+                api_key=api_key,
+                secret_key=api_secret,
+                base_url=base_url,
+                paper_trading=paper,
+            )
+            connected = await broker.connect()
+            if connected:
+                self.brokers["alpaca"] = broker
+                logger.info(f"Alpaca broker connected (Mode: {settings.mode})")
+            else:
+                logger.warning(
+                    "Alpaca broker connection failed - continuing in degraded mode"
+                )
+                self.brokers["alpaca"] = broker  # keep for later retry
+        except Exception as e:
+            logger.warning(f"Could not initialize Alpaca broker: {e} - paper mode will use cached/mock data")
+
+        # IBKR (if configured)
+        if settings.ibkr.account_id:
+            logger.info("Interactive Brokers configured (placeholder)")
+            self.brokers["ibkr"] = {
+                "account_id": settings.ibkr.account_id,
+                "host": settings.ibkr.host,
+                "port": settings.ibkr.port,
+                "client_id": settings.ibkr.client_id,
             }
 
-            # IBKR broker (if configured)
-            if settings.ibkr.account_id:
-                logger.info("Interactive Brokers configured")
-                self.brokers["ibkr"] = {
-                    "account_id": settings.ibkr.account_id,
-                    "host": settings.ibkr.host,
-                    "port": settings.ibkr.port,
-                    "client_id": settings.ibkr.client_id,
-                }
+        # Polymarket (if configured)
+        if settings.polymarket.api_key:
+            logger.info("Polymarket configured (placeholder)")
+            self.brokers["polymarket"] = {
+                "api_key": settings.polymarket.api_key,
+                "base_url": settings.polymarket.base_url,
+            }
 
-            # Polymarket (if configured)
-            if settings.polymarket.api_key:
-                logger.info("Polymarket configured")
-                self.brokers["polymarket"] = {
-                    "api_key": settings.polymarket.api_key,
-                    "base_url": settings.polymarket.base_url,
-                }
-
-            logger.info(f"Brokers initialized: {list(self.brokers.keys())}")
-
-        except Exception as e:
-            logger.error(f"Broker initialization error: {e}", exc_info=True)
-            raise
+        logger.info(f"Brokers initialized: {list(self.brokers.keys())}")
 
     async def _initialize_strategies(self) -> None:
-        """Initialize trading strategies."""
         logger.info("Initializing strategies...")
 
-        enabled_strategies = settings.get_enabled_strategies()
+        from strategies import (
+            MultiTimeframeMomentum,
+            StatisticalMeanReversion,
+            CryptoMomentum,
+            OptionsWheel,
+            PolymarketArbitrage,
+        )
 
-        if enabled_strategies["momentum"]:
-            logger.info(
-                f"Momentum strategy enabled (lookback: {settings.momentum.lookback}, "
-                f"threshold: {settings.momentum.threshold})"
-            )
-            self.strategies["momentum"] = {
-                "enabled": True,
-                "lookback": settings.momentum.lookback,
-                "threshold": settings.momentum.threshold,
-                "allocation_weight": settings.momentum.allocation_weight,
-            }
+        enabled = settings.get_enabled_strategies()
 
-        if enabled_strategies["mean_reversion"]:
-            logger.info(
-                f"Mean reversion strategy enabled (z_score: {settings.mean_reversion.z_score}, "
-                f"window: {settings.mean_reversion.window})"
-            )
-            self.strategies["mean_reversion"] = {
-                "enabled": True,
-                "z_score": settings.mean_reversion.z_score,
-                "window": settings.mean_reversion.window,
-                "allocation_weight": settings.mean_reversion.allocation_weight,
-            }
+        if enabled["momentum"]:
+            try:
+                config = {
+                    "enabled": True,
+                    "asset_class": "equities",
+                    "timeframe": "1D",
+                    "weight": settings.momentum.allocation_weight,
+                    "lookback": settings.momentum.lookback,
+                    "threshold": settings.momentum.threshold,
+                }
+                self.strategies["momentum"] = MultiTimeframeMomentum(config)
+                logger.info(
+                    f"Momentum strategy enabled "
+                    f"(lookback: {settings.momentum.lookback}, "
+                    f"threshold: {settings.momentum.threshold})"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize momentum strategy: {e}")
 
-        if enabled_strategies["crypto_momentum"]:
-            logger.info(f"Crypto momentum strategy enabled (lookback: {settings.crypto_momentum.lookback})")
-            self.strategies["crypto_momentum"] = {
-                "enabled": True,
-                "lookback": settings.crypto_momentum.lookback,
-                "allocation_weight": settings.crypto_momentum.allocation_weight,
-            }
+        if enabled["mean_reversion"]:
+            try:
+                config = {
+                    "enabled": True,
+                    "asset_class": "equities",
+                    "timeframe": "1D",
+                    "weight": settings.mean_reversion.allocation_weight,
+                    "z_score_entry": settings.mean_reversion.z_score,
+                    "lookback_period": settings.mean_reversion.window,
+                }
+                self.strategies["mean_reversion"] = StatisticalMeanReversion(config)
+                logger.info(
+                    f"Mean reversion strategy enabled "
+                    f"(z_score: {settings.mean_reversion.z_score}, "
+                    f"window: {settings.mean_reversion.window})"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize mean reversion strategy: {e}")
 
-        if enabled_strategies["options_wheel"]:
-            logger.info(f"Options wheel strategy enabled (target yield: {settings.options_wheel.target_yield_percent})")
-            self.strategies["options_wheel"] = {
-                "enabled": True,
-                "target_yield": settings.options_wheel.target_yield_percent,
-                "allocation_weight": settings.options_wheel.allocation_weight,
-            }
+        if enabled["crypto_momentum"]:
+            try:
+                config = {
+                    "enabled": True,
+                    "asset_class": "crypto",
+                    "timeframe": "4H",
+                    "weight": settings.crypto_momentum.allocation_weight,
+                    "lookback": settings.crypto_momentum.lookback,
+                }
+                self.strategies["crypto_momentum"] = CryptoMomentum(config)
+                logger.info(f"Crypto momentum strategy enabled")
+            except Exception as e:
+                logger.error(f"Failed to initialize crypto momentum strategy: {e}")
 
-        if enabled_strategies["polymarket"]:
-            logger.info(f"Polymarket strategy enabled (confidence: {settings.polymarket_strategy.confidence_threshold})")
-            self.strategies["polymarket"] = {
-                "enabled": True,
-                "confidence_threshold": settings.polymarket_strategy.confidence_threshold,
-                "allocation_weight": settings.polymarket_strategy.allocation_weight,
-            }
+        if enabled["options_wheel"]:
+            try:
+                config = {
+                    "enabled": True,
+                    "asset_class": "options",
+                    "weight": settings.options_wheel.allocation_weight,
+                    "target_yield": settings.options_wheel.target_yield_percent,
+                }
+                self.strategies["options_wheel"] = OptionsWheel(config)
+                logger.info(f"Options wheel strategy enabled")
+            except Exception as e:
+                logger.error(f"Failed to initialize options wheel strategy: {e}")
+
+        if enabled["polymarket"]:
+            try:
+                config = {
+                    "enabled": True,
+                    "asset_class": "prediction_market",
+                    "weight": settings.polymarket_strategy.allocation_weight,
+                    "confidence_threshold": settings.polymarket_strategy.confidence_threshold,
+                }
+                self.strategies["polymarket"] = PolymarketArbitrage(config)
+                logger.info(f"Polymarket strategy enabled")
+            except Exception as e:
+                logger.error(f"Failed to initialize polymarket strategy: {e}")
 
         logger.info(f"Strategies initialized: {list(self.strategies.keys())}")
 
     async def _initialize_risk_manager(self) -> None:
-        """Initialize risk management system."""
         logger.info("Initializing risk manager...")
 
-        self.risk_manager = {
-            "max_position_size": settings.trading.max_position_size_percent,
-            "max_portfolio_risk": settings.trading.max_portfolio_risk_percent,
-            "max_leverage": settings.trading.max_leverage,
-            "min_cash_buffer": settings.trading.min_cash_buffer_percent,
-            "max_slippage": settings.trading.max_slippage_percent,
-        }
+        try:
+            from risk.manager import RiskManager
+            from risk.position_sizer import PositionSizer
+            from risk.circuit_breaker import CircuitBreaker
 
-        logger.info(
-            f"Risk limits: "
-            f"pos_size={self.risk_manager['max_position_size']}, "
-            f"portfolio_risk={self.risk_manager['max_portfolio_risk']}, "
-            f"leverage={self.risk_manager['max_leverage']}"
-        )
+            self.risk_manager = RiskManager(
+                initial_equity=settings.trading.initial_capital,
+                max_drawdown_pct=10.0,
+                max_daily_loss_pct=2.0,
+                max_positions=30,
+                max_leverage=settings.trading.max_leverage,
+                max_single_position_pct=settings.trading.max_position_size_percent * 100,
+                max_loss_per_trade_pct=settings.trading.max_portfolio_risk_percent * 100,
+            )
 
+            self.position_sizer = PositionSizer(
+                kelly_fraction=0.25,
+                max_position_size=10000,
+                min_position_size=1,
+            )
+
+            self.circuit_breaker = CircuitBreaker(
+                max_daily_loss_pct=2.0,
+                max_drawdown_pct=10.0,
+                volatility_threshold=3.0,
+                heartbeat_timeout_sec=300,
+                cooldown_minutes=60,
+                auto_recovery=True,
+            )
+
+            logger.info(
+                f"Risk limits: "
+                f"pos_size={settings.trading.max_position_size_percent}, "
+                f"portfolio_risk={settings.trading.max_portfolio_risk_percent}, "
+                f"leverage={settings.trading.max_leverage}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize risk manager: {e}", exc_info=True)
+            raise
+
+    async def _initialize_data_feed(self) -> None:
+        logger.info("Initializing data feed...")
+
+        try:
+            from data.feeds import DataFeedManager
+
+            api_key, api_secret, _ = settings.get_alpaca_credentials()
+
+            fred_key = None
+            try:
+                fred_key = settings.fred.api_key
+            except Exception:
+                pass
+
+            self.data_feed = DataFeedManager(
+                alpaca_api_key=api_key,
+                alpaca_secret_key=api_secret,
+                fred_api_key=fred_key,
+            )
+            logger.info("Data feed manager initialized")
+        except Exception as e:
+            logger.warning(f"Data feed initialization failed: {e} - market data may be unavailable")
+
+    async def _initialize_order_executor(self) -> None:
+        logger.info("Initializing order executor...")
+
+        try:
+            from core.executor import OrderExecutor
+            self.order_executor = OrderExecutor(
+                brokers=self.brokers,
+                event_bus=event_bus,
+            )
+            logger.info("Order executor initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize order executor: {e}")
+
+    # Keep backward compat - old name pointed at position_manager dict
     async def _initialize_position_manager(self) -> None:
-        """Initialize position management system."""
-        logger.info("Initializing position manager...")
-
-        self.position_manager = {
-            "initial_capital": settings.trading.initial_capital,
-            "commission_per_trade": settings.trading.commission_per_trade,
-            "slippage_percent": settings.trading.slippage_percent,
-        }
-
-        logger.info(f"Initial capital: ${self.position_manager['initial_capital']:.2f}")
+        await self._initialize_data_feed()
 
     async def _setup_scheduler(self) -> None:
-        """Setup APScheduler for periodic tasks."""
         logger.info("Setting up scheduler...")
 
         self.scheduler = AsyncIOScheduler(timezone=settings.scheduler.timezone)
 
-        # Strategy checks
         if settings.scheduler.strategy_check_interval_seconds > 0:
             self.scheduler.add_job(
                 self._run_strategy_checks,
@@ -290,7 +443,6 @@ class TradingEngine:
                 f"Strategy checks scheduled every {settings.scheduler.strategy_check_interval_seconds}s"
             )
 
-        # Risk checks
         if settings.scheduler.risk_check_interval_seconds > 0:
             self.scheduler.add_job(
                 self._run_risk_checks,
@@ -301,7 +453,6 @@ class TradingEngine:
             )
             logger.info(f"Risk checks scheduled every {settings.scheduler.risk_check_interval_seconds}s")
 
-        # Data sync
         if settings.scheduler.data_sync_interval_seconds > 0:
             self.scheduler.add_job(
                 self._sync_market_data,
@@ -312,7 +463,6 @@ class TradingEngine:
             )
             logger.info(f"Data sync scheduled every {settings.scheduler.data_sync_interval_seconds}s")
 
-        # Portfolio snapshot
         self.scheduler.add_job(
             self._take_portfolio_snapshot,
             trigger="interval",
@@ -322,7 +472,17 @@ class TradingEngine:
         )
         logger.info("Portfolio snapshots scheduled every 5 minutes")
 
-        # System health check
+        # Order fill checks
+        if self.order_executor:
+            self.scheduler.add_job(
+                self._check_order_fills,
+                trigger="interval",
+                seconds=30,
+                id="order_fill_checks",
+                replace_existing=True,
+            )
+            logger.info("Order fill checks scheduled every 30s")
+
         self.scheduler.add_job(
             self._system_health_check,
             trigger="interval",
@@ -332,85 +492,317 @@ class TradingEngine:
         )
         logger.info("System health checks scheduled every 1 minute")
 
-    async def start(self) -> None:
-        """Start the trading engine."""
-        try:
-            await self.initialize()
-            self.running = True
+    # ── Core loop methods ───────────────────────────────────────────────
 
-            # Start scheduler
-            if self.scheduler:
-                self.scheduler.start()
-                logger.info("Scheduler started")
+    async def _sync_market_data(self) -> None:
+        """Fetch OHLCV data for configured symbols."""
+        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "SPY", "QQQ"]
 
-            # Start event bus listener
-            logger.info("Starting event bus listener...")
-            event_bus_task = asyncio.create_task(event_bus.start_listening())
+        if not self.data_feed:
+            logger.warning("Data feed not available - skipping market data sync")
+            return
 
-            logger.info("=" * 80)
-            logger.info(f"{settings.app_name} is running!")
-            logger.info(f"Uptime: {self._get_uptime()}")
-            logger.info("=" * 80)
+        synced = 0
+        for symbol in symbols:
+            try:
+                df = await self.data_feed.get_ohlcv(
+                    symbol=symbol,
+                    timeframe="1h",
+                    source="alpaca",
+                )
+                if df is not None and not df.empty:
+                    self._market_data[symbol] = df
+                    synced += 1
+            except Exception as e:
+                logger.error(f"Data sync failed for {symbol}: {e}")
 
-            # Keep engine running
-            while self.running:
-                await asyncio.sleep(1)
-
-        except Exception as e:
-            logger.error(f"Engine error: {e}", exc_info=True)
-            await self.shutdown()
-
-    async def shutdown(self) -> None:
-        """Gracefully shutdown the trading engine."""
-        logger.info("=" * 80)
-        logger.info("Shutting down trading engine...")
-        logger.info("=" * 80)
-
-        self.running = False
+        logger.debug(f"Market data synced for {synced}/{len(symbols)} symbols")
 
         try:
-            # Stop scheduler
-            if self.scheduler and self.scheduler.running:
-                self.scheduler.shutdown()
-                logger.info("Scheduler stopped")
-
-            # Stop event bus
-            await event_bus.stop_listening()
-            await event_bus.disconnect()
-            logger.info("Event bus disconnected")
-
-            # Close database
-            await DatabaseManager.close()
-            logger.info("Database closed")
-
-            logger.info(f"Total uptime: {self._get_uptime()}")
-            logger.info("Shutdown complete")
-
-        except Exception as e:
-            logger.error(f"Shutdown error: {e}", exc_info=True)
+            await event_bus.emit(Event(
+                event_type=EventType.DATA_SYNC_COMPLETED,
+                event_id=str(uuid.uuid4()),
+                timestamp=datetime.utcnow().isoformat(),
+                source="engine",
+                data={"symbols_synced": synced, "total": len(symbols)},
+            ))
+        except Exception:
+            pass
 
     async def _run_strategy_checks(self) -> None:
-        """Run all enabled strategies."""
+        """Run all enabled strategies and execute approved signals."""
+        from strategies.base import BaseStrategy, Direction
+
+        # Circuit breaker gate
+        if self.circuit_breaker and not self.circuit_breaker.can_trade():
+            logger.warning("Trading halted by circuit breaker")
+            return
+
+        # Heartbeat for dead-man's switch
+        if self.circuit_breaker:
+            self.circuit_breaker.heartbeat()
+
+        for name, strategy in self.strategies.items():
+            if not isinstance(strategy, BaseStrategy):
+                continue
+            if not strategy.enabled:
+                continue
+
+            try:
+                # Determine symbols for this strategy
+                asset_class = strategy.asset_class
+                if asset_class == "equities":
+                    symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "SPY", "QQQ"]
+                elif asset_class == "crypto":
+                    symbols = ["BTC/USD", "ETH/USD"]
+                else:
+                    symbols = list(self._market_data.keys())
+
+                for symbol in symbols:
+                    df = self._market_data.get(symbol)
+                    if df is None or df.empty:
+                        continue
+
+                    try:
+                        signals = strategy.generate_signals(df)
+                    except Exception as e:
+                        logger.error(f"Signal generation failed for {name}/{symbol}: {e}")
+                        continue
+
+                    for sig in signals:
+                        try:
+                            await self._process_signal(sig, name, symbol, df)
+                        except Exception as e:
+                            logger.error(f"Signal processing failed for {name}/{symbol}: {e}")
+
+            except Exception as e:
+                logger.error(f"Strategy {name} check failed: {e}", exc_info=True)
+                await event_bus.emit_risk_alert(
+                    alert_type="strategy_error",
+                    title="Strategy Execution Error",
+                    message=str(e),
+                    severity="error",
+                    strategy_name=name,
+                )
+
+    async def _process_signal(self, sig, strategy_name: str, symbol: str, df) -> None:
+        """Convert a strategy Signal to a risk-checked broker order."""
+        from strategies.base import Direction
+        from risk.manager import Order as RiskOrder, AssetClass, OrderType as RiskOrderType
+        from brokers.base import BaseBroker, OrderSide, OrderType
+
+        # Map direction to side
+        if sig.direction == Direction.LONG:
+            risk_side = RiskOrderType.BUY
+            broker_side = OrderSide.BUY
+        elif sig.direction == Direction.SHORT:
+            risk_side = RiskOrderType.SHORT
+            broker_side = OrderSide.SELL
+        elif sig.direction == Direction.EXIT:
+            risk_side = RiskOrderType.CLOSE
+            broker_side = OrderSide.SELL
+        else:
+            return  # NEUTRAL, skip
+
+        # Current price from last bar
+        current_price = float(df["close"].iloc[-1])
+
+        # Convert dollar position_size to share quantity
+        if sig.position_size and sig.position_size > 0 and current_price > 0:
+            quantity = sig.position_size / current_price
+        else:
+            quantity = max(1.0, (self._cash * 0.02) / current_price) if current_price > 0 else 0
+
+        if quantity <= 0:
+            return
+
+        # Determine asset class for risk manager
+        asset_class = AssetClass.EQUITY
+        if "/" in symbol:
+            asset_class = AssetClass.CRYPTO
+
+        # Build risk order
+        risk_order = RiskOrder(
+            symbol=symbol,
+            quantity=quantity,
+            price=current_price,
+            side=risk_side,
+            asset_class=asset_class,
+            strategy_id=strategy_name,
+        )
+
+        # Risk check
+        if self.risk_manager:
+            from risk.manager import RiskManager
+            if isinstance(self.risk_manager, RiskManager):
+                approved, reason = await self.risk_manager.check_order(risk_order)
+                if not approved:
+                    logger.info(f"Order rejected by risk manager: {symbol} - {reason}")
+                    return
+
+        # Emit signal event
         try:
-            logger.debug("Running strategy checks...")
-            for strategy_name in self.strategies:
-                if self.strategies[strategy_name]["enabled"]:
-                    logger.debug(f"Checking strategy: {strategy_name}")
-                    # Strategy execution would happen here
+            await event_bus.emit_signal_generated(
+                symbol=symbol,
+                signal_type=sig.direction.value.lower(),
+                strategy_name=strategy_name,
+                confidence=sig.strength,
+                price=current_price,
+                reason=str(sig.metadata),
+            )
         except Exception as e:
-            logger.error(f"Strategy check error: {e}", exc_info=True)
-            await event_bus.emit_risk_alert(
-                alert_type="strategy_error",
-                title="Strategy Execution Error",
-                message=str(e),
-                severity="error",
+            logger.debug(f"Failed to emit signal event: {e}")
+
+        # Broadcast signal via websocket
+        try:
+            from api.websocket import broadcast_signal
+            await broadcast_signal(
+                strategy=strategy_name,
+                symbol=symbol,
+                signal_type=sig.direction.value,
+                strength=sig.strength,
+            )
+        except Exception:
+            pass
+
+        # Submit to broker
+        broker = self.brokers.get("alpaca")
+        if broker and isinstance(broker, BaseBroker) and broker.is_connected:
+            try:
+                broker_order = await broker.submit_order(
+                    symbol=symbol,
+                    qty=round(quantity, 4),
+                    side=broker_side,
+                    order_type=OrderType.MARKET,
+                )
+
+                logger.info(
+                    f"Order submitted: {broker_side.value} {quantity:.4f} {symbol} "
+                    f"@ ~${current_price:.2f} (strategy: {strategy_name})"
+                )
+
+                # Emit order placed event
+                try:
+                    await event_bus.emit_order_placed(
+                        order_id=str(broker_order.order_id),
+                        symbol=symbol,
+                        side=broker_side.value,
+                        quantity=quantity,
+                        price=current_price,
+                        strategy_name=strategy_name,
+                    )
+                except Exception:
+                    pass
+
+                # Store order in DB
+                try:
+                    session = await get_session()
+                    async with session:
+                        db_order = DBOrder(
+                            broker_order_id=str(broker_order.order_id),
+                            symbol=symbol,
+                            side=DBOrderSide.BUY if broker_side == OrderSide.BUY else DBOrderSide.SELL,
+                            order_type="market",
+                            quantity=quantity,
+                            price=current_price,
+                            status=DBOrderStatus.SUBMITTED,
+                            strategy_name=strategy_name,
+                            broker_name="alpaca",
+                            submitted_at=datetime.utcnow(),
+                        )
+                        session.add(db_order)
+                        await session.commit()
+                except Exception as e:
+                    logger.error(f"Failed to store order in DB: {e}")
+
+                # Track for fill monitoring
+                if self.order_executor:
+                    await self.order_executor.track_order(
+                        order_id=str(broker_order.order_id),
+                        broker_name="alpaca",
+                        symbol=symbol,
+                        side=broker_side.value,
+                        quantity=quantity,
+                        price=current_price,
+                        strategy_name=strategy_name,
+                    )
+
+                # Broadcast trade via websocket
+                try:
+                    from api.websocket import broadcast_new_trade
+                    await broadcast_new_trade(
+                        trade_id=str(broker_order.order_id),
+                        symbol=symbol,
+                        side=broker_side.value,
+                        quantity=quantity,
+                        entry_price=current_price,
+                        strategy=strategy_name,
+                    )
+                except Exception:
+                    pass
+
+            except Exception as e:
+                logger.error(f"Order submission failed for {symbol}: {e}")
+        else:
+            logger.info(
+                f"Paper signal (no broker): {broker_side.value} {quantity:.4f} {symbol} "
+                f"@ ~${current_price:.2f} (strategy: {strategy_name})"
             )
 
     async def _run_risk_checks(self) -> None:
-        """Run risk management checks."""
+        """Monitor portfolio risk."""
         try:
-            logger.debug("Running risk checks...")
-            # Risk check logic would happen here
+            from risk.manager import RiskManager
+
+            if not self.risk_manager or not isinstance(self.risk_manager, RiskManager):
+                return
+
+            risk = await self.risk_manager.get_portfolio_risk()
+
+            # Update circuit breaker with risk metrics
+            if self.circuit_breaker:
+                if risk.max_drawdown_breach:
+                    await self.circuit_breaker.check_drawdown(risk.max_drawdown_pct)
+                if risk.max_daily_loss_breach:
+                    daily_loss_pct = abs(risk.today_pnl / risk.total_equity * 100) if risk.total_equity > 0 else 0
+                    await self.circuit_breaker.check_daily_loss(daily_loss_pct)
+
+            # Emit alerts for breaches
+            if risk.max_drawdown_breach:
+                await event_bus.emit_risk_alert(
+                    alert_type="max_drawdown",
+                    title="Maximum Drawdown Breach",
+                    message=f"Drawdown at {risk.max_drawdown_pct:.2f}%",
+                    severity="critical",
+                )
+                try:
+                    from api.websocket import broadcast_risk_alert
+                    await broadcast_risk_alert(
+                        severity="critical",
+                        message=f"Max drawdown breach: {risk.max_drawdown_pct:.2f}%",
+                        metric="drawdown",
+                        value=risk.max_drawdown_pct,
+                        threshold=self.risk_manager.max_drawdown_pct,
+                    )
+                except Exception:
+                    pass
+
+            if risk.max_daily_loss_breach:
+                await event_bus.emit_risk_alert(
+                    alert_type="max_daily_loss",
+                    title="Maximum Daily Loss Breach",
+                    message=f"Daily P&L: ${risk.today_pnl:.2f}",
+                    severity="critical",
+                )
+
+            if risk.concentration_breach:
+                await event_bus.emit_risk_alert(
+                    alert_type="concentration",
+                    title="Position Concentration Breach",
+                    message="Single position exceeds limit",
+                    severity="warning",
+                )
+
         except Exception as e:
             logger.error(f"Risk check error: {e}", exc_info=True)
             await event_bus.emit_risk_alert(
@@ -420,65 +812,238 @@ class TradingEngine:
                 severity="critical",
             )
 
-    async def _sync_market_data(self) -> None:
-        """Sync market data from brokers."""
-        try:
-            logger.debug("Syncing market data...")
-            # Data sync logic would happen here
-        except Exception as e:
-            logger.error(f"Data sync error: {e}", exc_info=True)
-
     async def _take_portfolio_snapshot(self) -> None:
-        """Take a snapshot of the current portfolio."""
+        """Snapshot portfolio state."""
         try:
-            logger.debug("Taking portfolio snapshot...")
-            # Portfolio snapshot logic would happen here
+            from brokers.base import BaseBroker
+
+            total_value = self._initial_capital
+            cash = self._initial_capital
+            positions_value = 0.0
+            unrealized_pnl = 0.0
+            num_positions = 0
+
+            # Try to get real account data from broker
+            broker = self.brokers.get("alpaca")
+            if broker and isinstance(broker, BaseBroker) and broker.is_connected:
+                try:
+                    account = await broker.get_account()
+                    total_value = account.balance
+                    cash = account.cash
+                    positions_value = account.equity - account.cash
+
+                    positions = await broker.get_positions()
+                    num_positions = len(positions)
+                    unrealized_pnl = sum(p.unrealized_pl for p in positions)
+                    self._open_positions = [
+                        {
+                            "symbol": p.symbol,
+                            "quantity": p.quantity,
+                            "avg_entry_price": p.avg_entry_price,
+                            "current_price": p.current_price,
+                            "market_value": p.market_value,
+                            "unrealized_pl": p.unrealized_pl,
+                            "unrealized_pl_pct": p.unrealized_pl_pct,
+                        }
+                        for p in positions
+                    ]
+                except Exception as e:
+                    logger.warning(f"Could not fetch broker account data: {e}")
+
+            # Update engine state
+            self._portfolio_value = total_value
+            self._cash = cash
+            self._positions_value = positions_value
+            self._total_pnl = total_value - self._initial_capital
+            return_pct = ((total_value - self._initial_capital) / self._initial_capital * 100) if self._initial_capital > 0 else 0.0
+
+            # Update risk manager equity
+            if self.risk_manager:
+                try:
+                    from risk.manager import RiskManager
+                    if isinstance(self.risk_manager, RiskManager):
+                        self.risk_manager.current_equity = total_value
+                except Exception:
+                    pass
+
+            # Store snapshot in DB
+            try:
+                session = await get_session()
+                async with session:
+                    snapshot = PortfolioSnapshot(
+                        timestamp=datetime.utcnow(),
+                        total_value=total_value,
+                        cash=cash,
+                        positions_value=positions_value,
+                        unrealized_gain_loss=unrealized_pnl,
+                        total_profit_loss=self._total_pnl,
+                        return_percent=return_pct,
+                        num_open_positions=num_positions,
+                    )
+                    session.add(snapshot)
+                    await session.commit()
+            except Exception as e:
+                logger.error(f"Failed to store portfolio snapshot: {e}")
+
+            # Broadcast via websocket
+            try:
+                from api.websocket import broadcast_portfolio_update
+                await broadcast_portfolio_update(
+                    portfolio_value=total_value,
+                    cash=cash,
+                    invested=positions_value,
+                    daily_pnl=self._daily_pnl,
+                    total_pnl=self._total_pnl,
+                    daily_pnl_percentage=(self._daily_pnl / total_value * 100) if total_value > 0 else 0,
+                )
+            except Exception:
+                pass
+
+            # Emit portfolio update event
+            try:
+                await event_bus.emit_portfolio_update(
+                    total_value=total_value,
+                    cash=cash,
+                    positions_value=positions_value,
+                    unrealized_gain_loss=unrealized_pnl,
+                    return_percent=return_pct,
+                )
+            except Exception:
+                pass
+
+            logger.debug(f"Portfolio snapshot: ${total_value:,.2f} (PnL: ${self._total_pnl:,.2f})")
+
         except Exception as e:
-            logger.error(f"Portfolio snapshot error: {e}", exc_info=True)
+            logger.error(f"Snapshot error: {e}", exc_info=True)
+
+    async def _check_order_fills(self) -> None:
+        """Check pending orders for fills."""
+        if self.order_executor:
+            try:
+                await self.order_executor.check_fills()
+            except Exception as e:
+                logger.error(f"Order fill check error: {e}")
+
+    # ── Event handlers ──────────────────────────────────────────────────
+
+    async def _handle_signal_event(self, event: Event) -> None:
+        logger.debug(f"Signal event received: {event.data}")
+
+    async def _handle_fill_event(self, event: Event) -> None:
+        logger.info(f"Order filled: {event.data}")
+
+    async def _handle_risk_alert(self, event: Event) -> None:
+        severity = event.data.get("severity", "warning")
+        logger.warning(f"Risk alert [{severity}]: {event.data.get('message', '')}")
+        if severity == "critical" and self.circuit_breaker:
+            await self.circuit_breaker.check_system_error(
+                event.data.get("message", "Unknown risk alert"),
+                critical=False,
+            )
+
+    # ── Lifecycle ───────────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        try:
+            await self.initialize()
+            self.running = True
+
+            if self.scheduler:
+                self.scheduler.start()
+                logger.info("Scheduler started")
+
+            logger.info("Starting event bus listener...")
+            event_bus_task = asyncio.create_task(event_bus.start_listening())
+
+            logger.info("=" * 80)
+            logger.info(f"{settings.app_name} is running!")
+            logger.info(f"Uptime: {self._get_uptime()}")
+            logger.info("=" * 80)
+
+            while self.running:
+                await asyncio.sleep(1)
+
+        except Exception as e:
+            logger.error(f"Engine error: {e}", exc_info=True)
+            await self.shutdown()
+
+    async def shutdown(self) -> None:
+        logger.info("=" * 80)
+        logger.info("Shutting down trading engine...")
+        logger.info("=" * 80)
+
+        self.running = False
+
+        try:
+            if self.scheduler and self.scheduler.running:
+                self.scheduler.shutdown()
+                logger.info("Scheduler stopped")
+
+            # Disconnect brokers
+            from brokers.base import BaseBroker
+            for name, broker in self.brokers.items():
+                if isinstance(broker, BaseBroker) and broker.is_connected:
+                    try:
+                        await broker.disconnect()
+                        logger.info(f"Broker {name} disconnected")
+                    except Exception as e:
+                        logger.error(f"Error disconnecting broker {name}: {e}")
+
+            await event_bus.stop_listening()
+            await event_bus.disconnect()
+            logger.info("Event bus disconnected")
+
+            await DatabaseManager.close()
+            logger.info("Database closed")
+
+            logger.info(f"Total uptime: {self._get_uptime()}")
+            logger.info("Shutdown complete")
+
+        except Exception as e:
+            logger.error(f"Shutdown error: {e}", exc_info=True)
 
     async def _system_health_check(self) -> None:
-        """Check system health."""
         try:
             db_healthy = await DatabaseManager.health_check()
             status = "healthy" if db_healthy else "degraded"
 
+            # Count active positions and orders
+            num_positions = len(self._open_positions)
+            num_orders = 0
+            if self.order_executor:
+                num_orders = len(self.order_executor.pending_orders)
+
             await event_bus.emit_system_health(
                 status=status,
                 uptime_seconds=self._get_uptime_seconds(),
-                active_positions=0,
-                active_orders=0,
+                active_positions=num_positions,
+                active_orders=num_orders,
                 memory_usage_percent=0.0,
             )
         except Exception as e:
             logger.error(f"Health check error: {e}", exc_info=True)
 
     def _get_uptime(self) -> str:
-        """Get formatted uptime."""
         if not self.start_time:
             return "N/A"
-
         delta = datetime.utcnow() - self.start_time
         hours, remainder = divmod(int(delta.total_seconds()), 3600)
         minutes, seconds = divmod(remainder, 60)
         return f"{hours}h {minutes}m {seconds}s"
 
     def _get_uptime_seconds(self) -> float:
-        """Get uptime in seconds."""
         if not self.start_time:
             return 0.0
         return (datetime.utcnow() - self.start_time).total_seconds()
 
     def handle_signal(self, signum: int, frame: any) -> None:
-        """Handle system signals."""
         logger.info(f"Received signal {signum}")
         asyncio.create_task(self.shutdown())
 
 
 async def run_engine() -> None:
-    """Run the trading engine with signal handling."""
     engine = TradingEngine()
 
-    # Register signal handlers
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, engine.handle_signal)
 

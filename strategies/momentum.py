@@ -5,7 +5,7 @@ Combines RSI, MADC, ADX, and EMA crossovers with daily/4H confirmation.
 
 from typing import List, Dict, Any
 import pandas as pd
-import pandas_ta as ta
+import strategies.indicators as ta
 import numpy as np
 from loguru import logger
 

@@ -57,7 +57,10 @@
       "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/docker-compose.prod.yml\" oci:/home/ubuntu/trading-bot/prod/docker-compose.prod.yml)",
       "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/docker-compose.prod.yml\" oci:/home/ubuntu/trading-bot/code/docker-compose.prod.yml)",
       "Bash(ssh -T git@github.com)",
-      "Bash(ssh-keyscan github.com)"
+      "Bash(ssh-keyscan github.com)",
+      "Skill(claude-md-management:revise-claude-md)",
+      "Skill(claude-md-management:revise-claude-md:*)",
+      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/requirements.txt\" oci:/home/ubuntu/trading-bot/code/requirements.txt)"
     ]
   }
 }

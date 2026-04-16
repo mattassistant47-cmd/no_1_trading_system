@@ -8,45 +8,12 @@ from abc import ABC
 
 from .base import BaseStrategy, Signal
 
-def _lazy_import(name):
-    """Lazy import to avoid failing on optional dependencies like pandas_ta."""
-    import importlib
-    try:
-        mod = importlib.import_module(f".{name}", __package__)
-        return mod
-    except (ImportError, ModuleNotFoundError):
-        return None
-
-# Lazy imports — these may fail if pandas_ta is not installed
-try:
-    from .momentum import MultiTimeframeMomentum
-except ImportError:
-    MultiTimeframeMomentum = None
-
-try:
-    from .mean_reversion import StatisticalMeanReversion
-except ImportError:
-    StatisticalMeanReversion = None
-
-try:
-    from .crypto_momentum import CryptoMomentum
-except ImportError:
-    CryptoMomentum = None
-
-try:
-    from .options_wheel import OptionsWheel
-except ImportError:
-    OptionsWheel = None
-
-try:
-    from .polymarket_arb import PolymarketArbitrage
-except ImportError:
-    PolymarketArbitrage = None
-
-try:
-    from .ensemble import EnsembleStrategy
-except ImportError:
-    EnsembleStrategy = None
+from .momentum import MultiTimeframeMomentum
+from .mean_reversion import StatisticalMeanReversion
+from .crypto_momentum import CryptoMomentum
+from .options_wheel import OptionsWheel
+from .polymarket_arb import PolymarketArbitrage
+from .ensemble import EnsembleStrategy
 
 __version__ = "1.0.0"
 

@@ -5,7 +5,7 @@ Includes pairs trading capability with co-integration detection.
 
 from typing import List, Dict, Any, Tuple
 import pandas as pd
-import pandas_ta as ta
+import strategies.indicators as ta
 import numpy as np
 from scipy import stats
 from loguru import logger
