@@ -53,7 +53,11 @@
       "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/api/deps.py\" oci:/home/ubuntu/trading-bot/code/api/deps.py)",
       "Bash(curl -sf http://10.8.0.1:8001/api/dashboard/overview)",
       "Bash(python3 -m json.tool)",
-      "Bash(curl -sf -o /dev/null -w \"Frontend: HTTP %{http_code}\" http://10.8.0.1:8080/)"
+      "Bash(curl -sf -o /dev/null -w \"Frontend: HTTP %{http_code}\" http://10.8.0.1:8080/)",
+      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/docker-compose.prod.yml\" oci:/home/ubuntu/trading-bot/prod/docker-compose.prod.yml)",
+      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/docker-compose.prod.yml\" oci:/home/ubuntu/trading-bot/code/docker-compose.prod.yml)",
+      "Bash(ssh -T git@github.com)",
+      "Bash(ssh-keyscan github.com)"
     ]
   }
 }
