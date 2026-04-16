@@ -196,6 +196,12 @@ class TradingEngine:
             self._start_background_tasks()
             logger.info("Background tasks started")
 
+            # Trigger initial snapshot immediately
+            try:
+                asyncio.create_task(self._take_portfolio_snapshot())
+            except Exception as e:
+                logger.debug(f"Initial snapshot failed: {e}")
+
             logger.info("Trading engine initialization complete")
             self.start_time = datetime.utcnow()
 

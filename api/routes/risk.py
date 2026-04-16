@@ -86,58 +86,62 @@ class RiskAlertListResponse(BaseModel):
     medium: int
 
 
-@router.get("/risk/overview", response_model=RiskOverview)
+@router.get("/risk/overview")
 async def get_risk_overview(
     engine: TradingEngine = Depends(get_engine),
 ):
-    """
-    Get risk dashboard with VaR, drawdown, exposure, and limits.
-    """
+    """Get real risk data from engine.risk_manager."""
     try:
-        var_95 = engine.var_95
-        max_drawdown = engine.max_drawdown
-        total_exposure = engine.total_exposure
-        leverage = engine.leverage
-        portfolio_heat = engine.portfolio_heat
+        risk_mgr = engine.risk_manager
+        portfolio_value = engine.portfolio_value or 100000.0
 
-        risk_metrics = [
-            RiskMetric(
-                name="Portfolio Heat",
-                value=portfolio_heat,
-                unit="%",
-                status="red" if portfolio_heat > 80 else "yellow" if portfolio_heat > 50 else "green",
-            ),
-            RiskMetric(
-                name="Leverage",
-                value=leverage,
-                unit="x",
-                status="red" if leverage > 3 else "yellow" if leverage > 2 else "green",
-                threshold=3.0,
-            ),
-            RiskMetric(
-                name="Max Drawdown",
-                value=abs(max_drawdown),
-                unit="%",
-                status="red" if abs(max_drawdown) > 20 else "yellow" if abs(max_drawdown) > 10 else "green",
-                threshold=20.0,
-            ),
-        ]
+        if risk_mgr and hasattr(risk_mgr, 'get_portfolio_risk'):
+            risk = await risk_mgr.get_portfolio_risk()
+            # Calculate drawdown
+            peak = getattr(risk_mgr, 'peak_equity', portfolio_value)
+            current = getattr(risk_mgr, 'current_equity', portfolio_value)
+            drawdown = ((peak - current) / peak * 100) if peak > 0 else 0.0
+            daily_loss = getattr(risk_mgr, 'daily_pnl', 0.0)
 
-        return RiskOverview(
-            var_95=var_95,
-            max_drawdown=max_drawdown,
-            total_exposure=total_exposure,
-            leverage=leverage,
-            risk_metrics=risk_metrics,
-            portfolio_heat=portfolio_heat,
-            timestamp=datetime.utcnow(),
-        )
+            cb = getattr(engine, 'circuit_breaker', None)
+            cb_status = "armed"
+            if cb is not None:
+                try:
+                    cb_status = "armed" if cb.can_trade() else "halted"
+                except Exception:
+                    cb_status = "armed"
 
+            return {
+                "var_95": 0.0,
+                "max_drawdown": drawdown,
+                "current_drawdown": drawdown,
+                "total_exposure": getattr(risk, 'gross_exposure', 0.0),
+                "leverage": getattr(risk, 'current_leverage', 0.0),
+                "daily_loss": daily_loss,
+                "max_daily_loss": getattr(risk_mgr, 'max_daily_loss_pct', 2.0),
+                "circuit_breaker_status": cb_status,
+                "risk_metrics": [],
+                "portfolio_heat": getattr(risk, 'gross_exposure', 0.0) / portfolio_value * 100 if portfolio_value else 0,
+                "alerts": [],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        else:
+            return {
+                "var_95": 0.0, "max_drawdown": 0.0, "current_drawdown": 0.0,
+                "total_exposure": 0.0, "leverage": 0.0,
+                "daily_loss": 0.0, "max_daily_loss": 2.0,
+                "circuit_breaker_status": "armed",
+                "risk_metrics": [], "portfolio_heat": 0.0, "alerts": [],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
     except Exception as e:
-        logger.error(f"Error fetching risk overview: {e}", exc_info=True)
+        logger.error(f"Risk overview error: {e}", exc_info=True)
         return {
-            "var_95": 0.0, "max_drawdown": 0.0, "total_exposure": 0.0,
-            "leverage": 0.0, "risk_metrics": [], "portfolio_heat": 0.0,
+            "var_95": 0.0, "max_drawdown": 0.0, "current_drawdown": 0.0,
+            "total_exposure": 0.0, "leverage": 0.0,
+            "daily_loss": 0.0, "max_daily_loss": 2.0,
+            "circuit_breaker_status": "armed",
+            "risk_metrics": [], "portfolio_heat": 0.0, "alerts": [],
             "timestamp": datetime.utcnow().isoformat(),
         }
 

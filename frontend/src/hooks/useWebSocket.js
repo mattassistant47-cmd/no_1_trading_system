@@ -3,6 +3,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 export const useWebSocket = (url, onMessage, onStatusChange) => {
   const wsRef = useRef(null)
   const reconnectTimeoutRef = useRef(null)
+  const reconnectAttempts = useRef(0)
   const [connected, setConnected] = useState(false)
 
   const connect = useCallback(() => {
@@ -17,6 +18,7 @@ export const useWebSocket = (url, onMessage, onStatusChange) => {
         console.log('WebSocket connected')
         setConnected(true)
         onStatusChange?.(true)
+        reconnectAttempts.current = 0
         if (reconnectTimeoutRef.current) {
           clearTimeout(reconnectTimeoutRef.current)
           reconnectTimeoutRef.current = null
@@ -57,14 +59,17 @@ export const useWebSocket = (url, onMessage, onStatusChange) => {
         setConnected(false)
         onStatusChange?.(false)
         wsRef.current = null
-        // Reconnect after 5 seconds
-        reconnectTimeoutRef.current = setTimeout(connect, 5000)
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000)
+        reconnectAttempts.current += 1
+        reconnectTimeoutRef.current = setTimeout(connect, delay)
       }
     } catch (err) {
       console.error('Failed to connect WebSocket:', err)
       setConnected(false)
       onStatusChange?.(false)
-      reconnectTimeoutRef.current = setTimeout(connect, 5000)
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000)
+      reconnectAttempts.current += 1
+      reconnectTimeoutRef.current = setTimeout(connect, delay)
     }
   }, [url, onMessage, onStatusChange])
 

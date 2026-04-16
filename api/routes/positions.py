@@ -21,32 +21,6 @@ router = APIRouter()
 
 
 # Response models
-class PositionResponse(BaseModel):
-    id: str
-    symbol: str
-    quantity: float
-    entry_price: float
-    current_price: float
-    entry_time: datetime
-    unrealized_pnl: float
-    unrealized_pnl_percentage: float
-    realized_pnl: float
-    side: str
-    strategy: str
-    broker: str
-    status: str
-
-    class Config:
-        from_attributes = True
-
-
-class PositionListResponse(BaseModel):
-    positions: list[PositionResponse]
-    total: int
-    total_unrealized_pnl: float
-    total_realized_pnl: float
-
-
 class HistoricalPosition(BaseModel):
     id: str
     symbol: str
@@ -66,16 +40,6 @@ class HistoricalPositionListResponse(BaseModel):
     total: int
 
 
-class ExposureResponse(BaseModel):
-    by_sector: dict[str, float]
-    by_asset_class: dict[str, float]
-    by_strategy: dict[str, float]
-    total_exposure: float
-    long_exposure: float
-    short_exposure: float
-    net_exposure: float
-
-
 class ClosePositionRequest(BaseModel):
     price: Optional[float] = Field(None, description="Close at specific price, None for market")
     comment: Optional[str] = None
@@ -91,57 +55,115 @@ class ClosePositionResponse(BaseModel):
     timestamp: datetime
 
 
-@router.get("/positions", response_model=PositionListResponse)
-async def list_open_positions(
-    symbol: Optional[str] = Query(None),
-    strategy: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Get all open positions with unrealized P&L.
-    """
+@router.get("/positions")
+async def get_positions(engine: TradingEngine = Depends(get_engine)):
+    """Get all open positions from Alpaca (live data)."""
     try:
-        query = select(Position).where(Position.status == "open")
+        broker = engine.brokers.get("alpaca")
+        if not broker or not broker._connected:
+            return {"positions": [], "total": 0, "total_unrealized_pnl": 0.0, "total_realized_pnl": 0.0}
 
-        filters = []
-        if symbol:
-            filters.append(Position.symbol == symbol)
-        if strategy:
-            filters.append(Position.strategy == strategy)
+        alpaca_positions = await broker.get_positions()
+        portfolio_value = engine.portfolio_value or 100000.0
 
-        if filters:
-            query = query.where(and_(*filters))
+        positions_list = []
+        total_unrealized = 0.0
+        for p in alpaca_positions:
+            qty = float(p.quantity)
+            entry = float(p.avg_entry_price)
+            current = float(p.current_price) if p.current_price else entry
+            unreal = float(p.unrealized_pl) if p.unrealized_pl else 0.0
+            market_val = float(p.market_value) if p.market_value else qty * current
+            pct_change = ((current - entry) / entry * 100) if entry else 0.0
+            portfolio_pct = (abs(market_val) / portfolio_value * 100) if portfolio_value else 0.0
+            side = "long" if qty > 0 else "short"
 
-        positions = (await db.execute(query)).scalars().all()
+            positions_list.append({
+                "id": p.symbol,  # use symbol as id
+                "symbol": p.symbol,
+                "qty": qty,
+                "side": side,
+                "entryPrice": entry,
+                "currentPrice": current,
+                "marketValue": market_val,
+                "unrealizedPnL": unreal,
+                "percentChange": pct_change,
+                "portfolioPercent": portfolio_pct,
+                "strategy": getattr(p, 'strategy', 'manual'),
+                "assetClass": getattr(p, 'asset_class', 'equity'),
+            })
+            total_unrealized += unreal
 
-        total_unrealized = sum(p.unrealized_pnl for p in positions if p.unrealized_pnl)
-        total_realized = sum(p.realized_pnl for p in positions if p.realized_pnl)
-
-        return PositionListResponse(
-            positions=[PositionResponse.model_validate(p) for p in positions],
-            total=len(positions),
-            total_unrealized_pnl=total_unrealized,
-            total_realized_pnl=total_realized,
-        )
-
+        return {
+            "positions": positions_list,
+            "total": len(positions_list),
+            "total_unrealized_pnl": total_unrealized,
+            "total_realized_pnl": 0.0,
+        }
     except Exception as e:
-        logger.error(f"Error listing positions: {e}", exc_info=True)
-        return PositionListResponse(
-            positions=[], total=0,
-            total_unrealized_pnl=0.0, total_realized_pnl=0.0,
-        )
+        logger.error(f"Error fetching positions: {e}", exc_info=True)
+        return {"positions": [], "total": 0, "total_unrealized_pnl": 0.0, "total_realized_pnl": 0.0}
 
 
 @router.get("/positions/open")
-async def get_open_positions(
-    db: AsyncSession = Depends(get_db),
-    engine: TradingEngine = Depends(get_engine),
-):
+async def get_open_positions(engine: TradingEngine = Depends(get_engine)):
     """Get open positions (alias for /positions)."""
+    return await get_positions(engine=engine)
+
+
+@router.get("/positions/exposure")
+async def get_exposure(engine: TradingEngine = Depends(get_engine)):
+    """Get real exposure breakdown from Alpaca positions."""
     try:
-        return await list_open_positions(db=db)
-    except Exception:
-        return []
+        broker = engine.brokers.get("alpaca")
+        portfolio_value = engine.portfolio_value or 100000.0
+
+        if not broker or not broker._connected:
+            return {
+                "total_exposure": 0.0, "long_exposure": 0.0, "short_exposure": 0.0,
+                "net_exposure": 0.0, "by_asset_class": {}, "by_sector": {}, "by_strategy": {},
+                "by_symbol": []
+            }
+
+        positions = await broker.get_positions()
+        long_val = sum(float(p.market_value or 0) for p in positions if float(p.quantity or 0) > 0)
+        short_val = sum(abs(float(p.market_value or 0)) for p in positions if float(p.quantity or 0) < 0)
+
+        # Convert to percentages
+        long_pct = (long_val / portfolio_value * 100) if portfolio_value else 0.0
+        short_pct = (short_val / portfolio_value * 100) if portfolio_value else 0.0
+        total_pct = long_pct + short_pct
+        net_pct = long_pct - short_pct
+
+        by_asset_class = {}
+        by_symbol = []
+        for p in positions:
+            ac = getattr(p, 'asset_class', 'equity')
+            val = float(p.market_value or 0)
+            by_asset_class[ac] = by_asset_class.get(ac, 0) + val
+            by_symbol.append({
+                "symbol": p.symbol,
+                "value": val,
+                "percent": (abs(val) / portfolio_value * 100) if portfolio_value else 0,
+            })
+
+        return {
+            "total_exposure": total_pct,
+            "long_exposure": long_pct,
+            "short_exposure": short_pct,
+            "net_exposure": net_pct,
+            "by_asset_class": by_asset_class,
+            "by_sector": {},
+            "by_strategy": {},
+            "by_symbol": by_symbol,
+        }
+    except Exception as e:
+        logger.error(f"Error computing exposure: {e}", exc_info=True)
+        return {
+            "total_exposure": 0.0, "long_exposure": 0.0, "short_exposure": 0.0,
+            "net_exposure": 0.0, "by_asset_class": {}, "by_sector": {}, "by_strategy": {},
+            "by_symbol": []
+        }
 
 
 @router.get("/positions/history", response_model=HistoricalPositionListResponse)
@@ -251,33 +273,4 @@ async def close_position(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to close position",
-        )
-
-
-@router.get("/positions/exposure", response_model=ExposureResponse)
-async def get_exposure(
-    engine: TradingEngine = Depends(get_engine),
-):
-    """
-    Get exposure breakdown by sector, asset class, and strategy.
-    """
-    try:
-        # TODO: Implement exposure calculation
-        # Placeholder implementation
-        return ExposureResponse(
-            by_sector={},
-            by_asset_class={},
-            by_strategy={},
-            total_exposure=engine.portfolio_value,
-            long_exposure=0,
-            short_exposure=0,
-            net_exposure=0,
-        )
-
-    except Exception as e:
-        logger.error(f"Error fetching exposure: {e}", exc_info=True)
-        return ExposureResponse(
-            by_sector={}, by_asset_class={}, by_strategy={},
-            total_exposure=0.0, long_exposure=0.0,
-            short_exposure=0.0, net_exposure=0.0,
         )

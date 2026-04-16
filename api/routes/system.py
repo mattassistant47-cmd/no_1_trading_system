@@ -112,19 +112,16 @@ async def get_system_health(
             db_status = _default("Database")
 
         try:
-            alpaca_status = await engine.check_broker_health("alpaca")
+            alpaca_status = await _check_alpaca_broker(engine)
         except Exception:
             alpaca_status = _default("Alpaca")
 
-        try:
-            ibkr_status = await engine.check_broker_health("ibkr")
-        except Exception:
-            ibkr_status = _default("IBKR")
-
-        try:
-            polymarket_status = await engine.check_broker_health("polymarket")
-        except Exception:
-            polymarket_status = _default("Polymarket")
+        ibkr_status = ComponentHealth(
+            name="IBKR", status="degraded", message="Not configured", last_check=now
+        )
+        polymarket_status = ComponentHealth(
+            name="Polymarket", status="degraded", message="Not configured", last_check=now
+        )
 
         try:
             feeds_status = await engine.check_feeds_health()
@@ -382,3 +379,36 @@ async def _restart_engine(engine: TradingEngine, reason: Optional[str]):
         logger.info("Engine restart complete")
     except Exception as e:
         logger.error(f"Engine restart failed: {e}", exc_info=True)
+
+
+async def _check_alpaca_broker(engine) -> ComponentHealth:
+    """Check Alpaca broker health by calling get_account()."""
+    try:
+        broker = engine.brokers.get("alpaca") if engine else None
+        if not broker:
+            return ComponentHealth(
+                name="Alpaca", status="unhealthy",
+                message="Not initialized", last_check=datetime.utcnow(),
+            )
+        if not broker._connected:
+            return ComponentHealth(
+                name="Alpaca", status="unhealthy",
+                message="Disconnected", last_check=datetime.utcnow(),
+            )
+
+        import time
+        start = time.time()
+        account = await broker.get_account()
+        elapsed = (time.time() - start) * 1000
+        return ComponentHealth(
+            name="Alpaca",
+            status="healthy",
+            message=f"Account: {getattr(account, 'account_id', 'unknown')}",
+            last_check=datetime.utcnow(),
+            response_time_ms=elapsed,
+        )
+    except Exception as e:
+        return ComponentHealth(
+            name="Alpaca", status="unhealthy",
+            message=str(e)[:100], last_check=datetime.utcnow(),
+        )

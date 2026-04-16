@@ -67,7 +67,13 @@
       "Bash(scp docker-compose.dev.yml oci:/home/ubuntu/trading-bot/code/docker-compose.dev.yml)",
       "Bash(scp docker-compose.dev.yml oci:/home/ubuntu/trading-bot/dev/docker-compose.dev.yml)",
       "Bash(scp data/alpaca_feed.py oci:/home/ubuntu/trading-bot/code/data/alpaca_feed.py)",
-      "Bash(scp brokers/__init__.py oci:/home/ubuntu/trading-bot/code/brokers/__init__.py)"
+      "Bash(scp brokers/__init__.py oci:/home/ubuntu/trading-bot/code/brokers/__init__.py)",
+      "mcp__playwright__browser_close",
+      "mcp__playwright__browser_navigate",
+      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/nginx.dev.conf\" oci:/home/ubuntu/trading-bot/code/nginx.dev.conf)",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_wait_for"
     ]
   }
 }

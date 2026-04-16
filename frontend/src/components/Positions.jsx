@@ -33,7 +33,8 @@ export default function Positions() {
         const data = await get('/api/positions')
         let exposure = {}
         try { exposure = await get('/api/positions/exposure') } catch (e) { /* optional */ }
-        setPositions(snakeToCamel(Array.isArray(data) ? data : []))
+        const positionsList = data?.positions || (Array.isArray(data) ? data : [])
+        setPositions(snakeToCamel(positionsList))
         setExposureData(snakeToCamel(exposure || {}))
         setError(null)
       } catch (err) {

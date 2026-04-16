@@ -234,35 +234,131 @@ async def get_performance_metrics(
 
 @router.get("/dashboard/overview")
 async def get_dashboard_overview(
+    db: AsyncSession = Depends(get_db),
     engine: TradingEngine = Depends(get_engine),
 ):
-    """Aggregated dashboard overview for frontend."""
+    """Aggregated dashboard overview with real Alpaca data."""
     try:
+        # Portfolio data from Alpaca account
+        broker = engine.brokers.get("alpaca")
+        portfolio_value = engine.portfolio_value or 100000.0
+        cash = engine.cash or portfolio_value
+        daily_pnl = 0.0
+
+        if broker and broker._connected:
+            try:
+                account = await broker.get_account()
+                # Account dataclass: balance=portfolio_value, equity, cash
+                portfolio_value = float(account.balance or portfolio_value)
+                cash = float(account.cash or cash)
+                # Try to get last_equity from raw Alpaca client for daily PnL
+                try:
+                    raw_account = broker.client.get_account()
+                    last_equity = float(raw_account.last_equity or 0)
+                    current_equity = float(raw_account.equity or portfolio_value)
+                    daily_pnl = current_equity - last_equity if last_equity else 0.0
+                except Exception:
+                    daily_pnl = 0.0
+            except Exception as e:
+                logger.debug(f"Could not get Alpaca account: {e}")
+
+        invested = portfolio_value - cash
+        initial_capital = engine.initial_capital or 100000.0
+        total_pnl = portfolio_value - initial_capital
+        total_pnl_pct = (total_pnl / initial_capital * 100) if initial_capital else 0.0
+        daily_pnl_pct = (daily_pnl / portfolio_value * 100) if portfolio_value else 0.0
+
+        # Equity curve from PortfolioSnapshot table
+        equity_curve = []
+        try:
+            from core.models import PortfolioSnapshot
+            stmt = select(PortfolioSnapshot).order_by(PortfolioSnapshot.timestamp.desc()).limit(30)
+            result = await db.execute(stmt)
+            snapshots = list(reversed(list(result.scalars().all())))
+            for s in snapshots:
+                equity_curve.append({
+                    "date": s.timestamp.strftime("%Y-%m-%d %H:%M") if s.timestamp else "",
+                    "value": float(s.total_value or 0),
+                    "cumulativePnl": float(s.total_profit_loss or 0),
+                })
+        except Exception as e:
+            logger.debug(f"Could not fetch equity curve: {e}")
+
+        # If no snapshots yet, seed with current value
+        if not equity_curve:
+            equity_curve = [{
+                "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+                "value": portfolio_value,
+                "cumulativePnl": total_pnl,
+            }]
+
+        # Asset allocation
+        asset_allocation = [{"name": "Cash", "value": cash}]
+        if broker and broker._connected and invested > 0:
+            try:
+                positions = await broker.get_positions()
+                by_class = {}
+                for p in positions:
+                    ac = getattr(p, 'asset_class', 'Equity') or 'Equity'
+                    ac = ac.capitalize() if isinstance(ac, str) else 'Equity'
+                    val = abs(float(p.market_value or 0))
+                    by_class[ac] = by_class.get(ac, 0) + val
+                for name, val in by_class.items():
+                    asset_allocation.append({"name": name, "value": val})
+            except Exception:
+                asset_allocation.append({"name": "Equity", "value": invested})
+
+        # Strategy performance
+        strategy_performance = []
+        for name, strat in (engine.strategies or {}).items():
+            try:
+                metrics = getattr(strat, 'metrics', None)
+                strategy_performance.append({
+                    "name": name,
+                    "return": float(getattr(metrics, 'avg_pnl', 0) or 0),
+                    "sharpe": float(getattr(metrics, 'sharpe_ratio', 0) or 0),
+                    "trades": int(getattr(metrics, 'total_trades', 0) or 0),
+                })
+            except Exception:
+                strategy_performance.append({"name": name, "return": 0.0, "sharpe": 0.0, "trades": 0})
+
+        open_positions = 0
+        if broker and broker._connected:
+            try:
+                positions = await broker.get_positions()
+                open_positions = len(positions)
+            except Exception:
+                open_positions = len(getattr(engine, 'open_positions', []))
+
         return {
-            "portfolioValue": getattr(engine, 'portfolio_value', 100000.0),
-            "cash": getattr(engine, 'cash', 100000.0),
-            "invested": getattr(engine, 'portfolio_value', 100000.0) - getattr(engine, 'cash', 100000.0),
-            "dailyPnl": getattr(engine, 'daily_pnl', 0.0),
-            "dailyPnlPercentage": 0.0,
-            "totalPnl": getattr(engine, 'total_pnl', 0.0),
-            "totalPnlPercentage": getattr(engine, 'total_pnl_percentage', 0.0),
-            "winRate": getattr(engine, 'win_rate', 0.0),
-            "sharpeRatio": getattr(engine, 'sharpe_ratio', 0.0),
+            "portfolioValue": portfolio_value,
+            "cash": cash,
+            "invested": invested,
+            "dailyPnl": daily_pnl,
+            "dailyPnlPercentage": daily_pnl_pct,
+            "totalPnl": total_pnl,
+            "totalPnlPercentage": total_pnl_pct,
+            "winRate": float(getattr(engine, 'win_rate', 0) or 0),
+            "sharpeRatio": float(getattr(engine, 'sharpe_ratio', 0) or 0),
             "totalTrades": 0,
-            "openPositions": len(getattr(engine, 'open_positions', [])),
-            "equityCurve": [],
+            "openPositions": open_positions,
+            "equityCurve": equity_curve,
+            "assetAllocation": asset_allocation,
+            "strategyPerformance": strategy_performance,
             "recentTrades": [],
-            "activeStrategies": len(getattr(engine, 'strategies', {})),
+            "activeSignals": [],
+            "activeStrategies": len(engine.strategies or {}),
             "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
-        logger.error(f"Dashboard overview error: {e}")
+        logger.error(f"Dashboard overview error: {e}", exc_info=True)
         return {
             "portfolioValue": 100000.0, "cash": 100000.0, "invested": 0.0,
             "dailyPnl": 0.0, "dailyPnlPercentage": 0.0,
             "totalPnl": 0.0, "totalPnlPercentage": 0.0,
             "winRate": 0.0, "sharpeRatio": 0.0,
             "totalTrades": 0, "openPositions": 0,
-            "equityCurve": [], "recentTrades": [],
-            "activeStrategies": 0, "timestamp": datetime.utcnow().isoformat(),
+            "equityCurve": [], "assetAllocation": [], "strategyPerformance": [],
+            "recentTrades": [], "activeSignals": [], "activeStrategies": 0,
+            "timestamp": datetime.utcnow().isoformat(),
         }

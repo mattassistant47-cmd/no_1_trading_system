@@ -76,10 +76,17 @@ export default function Dashboard() {
   }
 
   const {
-    portfolioValue = 100000,
-    dailyPnL = 1250,
-    totalReturn = 12.5,
-    sharpeRatio = 1.8,
+    portfolioValue = 0,
+    cash = 0,
+    invested = 0,
+    dailyPnl = 0,
+    dailyPnlPercentage = 0,
+    totalPnl = 0,
+    totalPnlPercentage = 0,
+    winRate = 0,
+    sharpeRatio = 0,
+    openPositions = 0,
+    activeStrategies = 0,
     equityCurve = [],
     assetAllocation = [],
     recentTrades = [],
@@ -87,8 +94,7 @@ export default function Dashboard() {
     strategyPerformance = [],
   } = dashboardData || {}
 
-  const dailyPnLPercent = portfolioValue ? (dailyPnL / portfolioValue) * 100 : 0
-  const isProfitable = dailyPnL >= 0
+  const isProfitable = dailyPnl >= 0
 
   return (
     <div className="p-8 space-y-8">
@@ -108,22 +114,22 @@ export default function Dashboard() {
         <KPICard
           label="Portfolio Value"
           value={`$${(portfolioValue || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
-          change={dailyPnLPercent}
+          change={dailyPnlPercentage}
           positive={isProfitable}
           icon="TrendingUp"
         />
         <KPICard
           label="Daily P&L"
-          value={`$${(dailyPnL || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`}
-          change={dailyPnLPercent}
+          value={`$${(dailyPnl || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`}
+          change={dailyPnlPercentage}
           positive={isProfitable}
           icon="DollarSign"
         />
         <KPICard
           label="Total Return"
-          value={`${(totalReturn || 0).toFixed(2)}%`}
-          change={totalReturn}
-          positive={totalReturn >= 0}
+          value={`${(totalPnlPercentage || 0).toFixed(2)}%`}
+          change={totalPnlPercentage}
+          positive={totalPnlPercentage >= 0}
           icon="PercentSquare"
         />
         <KPICard
