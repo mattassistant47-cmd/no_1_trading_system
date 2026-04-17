@@ -271,6 +271,11 @@ class TradingEngine:
             CryptoMomentum,
             OptionsWheel,
             PolymarketArbitrage,
+            EnsembleStrategy,
+            Breakout,
+            TrendFollowing,
+            PairsTrading,
+            VolatilityRegime,
         )
 
         enabled = settings.get_enabled_strategies()
@@ -349,9 +354,95 @@ class TradingEngine:
                     "confidence_threshold": settings.polymarket_strategy.confidence_threshold,
                 }
                 self.strategies["polymarket"] = PolymarketArbitrage(config)
-                logger.info(f"Polymarket strategy enabled")
+                logger.info("Polymarket strategy enabled")
             except Exception as e:
                 logger.error(f"Failed to initialize polymarket strategy: {e}")
+
+        if enabled.get("breakout"):
+            try:
+                config = {
+                    "enabled": True,
+                    "asset_class": "equities",
+                    "timeframe": "1D",
+                    "weight": settings.breakout.allocation_weight,
+                    "lookback": settings.breakout.lookback,
+                    "atr_multiplier": settings.breakout.atr_multiplier,
+                    "volume_confirmation": settings.breakout.volume_confirmation,
+                }
+                self.strategies["breakout"] = Breakout(config)
+                logger.info(
+                    f"Breakout strategy enabled "
+                    f"(lookback: {settings.breakout.lookback}, atr×{settings.breakout.atr_multiplier})"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize breakout strategy: {e}")
+
+        if enabled.get("trend_following"):
+            try:
+                config = {
+                    "enabled": True,
+                    "asset_class": "equities",
+                    "timeframe": "1D",
+                    "weight": settings.trend_following.allocation_weight,
+                    "fast_sma": settings.trend_following.fast_sma,
+                    "slow_sma": settings.trend_following.slow_sma,
+                }
+                self.strategies["trend_following"] = TrendFollowing(config)
+                logger.info(
+                    f"Trend following strategy enabled "
+                    f"(SMA {settings.trend_following.fast_sma}/{settings.trend_following.slow_sma})"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize trend following strategy: {e}")
+
+        if enabled.get("pairs_trading"):
+            try:
+                config = {
+                    "enabled": True,
+                    "asset_class": "equities",
+                    "timeframe": "1D",
+                    "weight": settings.pairs_trading.allocation_weight,
+                    "z_entry": settings.pairs_trading.z_entry,
+                    "z_exit": settings.pairs_trading.z_exit,
+                    "correlation_min": settings.pairs_trading.correlation_min,
+                }
+                self.strategies["pairs_trading"] = PairsTrading(config)
+                logger.info(
+                    f"Pairs trading strategy enabled "
+                    f"(z_entry: {settings.pairs_trading.z_entry}, corr≥{settings.pairs_trading.correlation_min})"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize pairs trading strategy: {e}")
+
+        if enabled.get("volatility_regime"):
+            try:
+                config = {
+                    "enabled": True,
+                    "asset_class": "meta",
+                    "weight": settings.volatility_regime.allocation_weight,
+                    "vix_low": settings.volatility_regime.vix_low,
+                    "vix_high": settings.volatility_regime.vix_high,
+                }
+                self.strategies["volatility_regime"] = VolatilityRegime(config)
+                logger.info(
+                    f"Volatility regime strategy enabled "
+                    f"(VIX bands: {settings.volatility_regime.vix_low}-{settings.volatility_regime.vix_high})"
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize volatility regime strategy: {e}")
+
+        if enabled.get("ensemble"):
+            try:
+                config = {
+                    "enabled": True,
+                    "asset_class": "meta",
+                    "weight": settings.ensemble.allocation_weight,
+                    "min_confidence": settings.ensemble.min_confidence,
+                }
+                self.strategies["ensemble"] = EnsembleStrategy(config)
+                logger.info("Ensemble strategy enabled (aggregates all signals)")
+            except Exception as e:
+                logger.error(f"Failed to initialize ensemble strategy: {e}")
 
         logger.info(f"Strategies initialized: {list(self.strategies.keys())}")
 

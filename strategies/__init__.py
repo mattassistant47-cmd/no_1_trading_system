@@ -14,6 +14,10 @@ from .crypto_momentum import CryptoMomentum
 from .options_wheel import OptionsWheel
 from .polymarket_arb import PolymarketArbitrage
 from .ensemble import EnsembleStrategy
+from .breakout import Breakout
+from .trend_following import TrendFollowing
+from .pairs_trading import PairsTrading
+from .volatility_regime import VolatilityRegime
 
 __version__ = "1.0.0"
 
@@ -26,6 +30,10 @@ __all__ = [
     "OptionsWheel",
     "PolymarketArbitrage",
     "EnsembleStrategy",
+    "Breakout",
+    "TrendFollowing",
+    "PairsTrading",
+    "VolatilityRegime",
     "StrategyRegistry",
 ]
 
@@ -43,6 +51,10 @@ class StrategyRegistry:
         "options_wheel": OptionsWheel,
         "polymarket_arb": PolymarketArbitrage,
         "ensemble": EnsembleStrategy,
+        "breakout": Breakout,
+        "trend_following": TrendFollowing,
+        "pairs_trading": PairsTrading,
+        "volatility_regime": VolatilityRegime,
     }
 
     @classmethod

@@ -154,21 +154,21 @@ class MeanReversionStrategySettings(BaseSettings):
 
 
 class CryptoMomentumStrategySettings(BaseSettings):
-    """Crypto momentum strategy parameters."""
+    """Crypto momentum strategy - 24/7 trending crypto markets."""
 
-    enabled: bool = Field(False, alias="CRYPTO_MOMENTUM_ENABLED")
+    enabled: bool = Field(True, alias="CRYPTO_MOMENTUM_ENABLED")
     lookback: int = Field(14, alias="CRYPTO_MOMENTUM_LOOKBACK")
-    allocation_weight: float = 0.2
+    allocation_weight: float = 0.15
 
     class Config:
         env_file = ".env"
 
 
 class OptionsWheelStrategySettings(BaseSettings):
-    """Options wheel strategy parameters."""
+    """Options wheel - income from CSP + CC on sideways markets."""
 
-    enabled: bool = Field(False, alias="OPTIONS_WHEEL_ENABLED")
-    allocation_weight: float = 0.1
+    enabled: bool = Field(True, alias="OPTIONS_WHEEL_ENABLED")
+    allocation_weight: float = 0.10
     target_yield_percent: float = 0.05
 
     class Config:
@@ -176,11 +176,72 @@ class OptionsWheelStrategySettings(BaseSettings):
 
 
 class PolymarketStrategySettings(BaseSettings):
-    """Polymarket prediction markets strategy."""
+    """Polymarket prediction markets - arbitrage and Kelly betting."""
 
-    enabled: bool = Field(False, alias="POLYMARKET_ENABLED")
-    allocation_weight: float = 0.1
+    enabled: bool = Field(True, alias="POLYMARKET_ENABLED")
+    allocation_weight: float = 0.05
     confidence_threshold: float = 0.55
+
+    class Config:
+        env_file = ".env"
+
+
+class EnsembleStrategySettings(BaseSettings):
+    """Ensemble strategy - aggregates signals from all strategies."""
+
+    enabled: bool = Field(True, alias="ENSEMBLE_ENABLED")
+    allocation_weight: float = 0.0  # meta-strategy, no direct allocation
+    min_confidence: float = Field(0.6, alias="ENSEMBLE_MIN_CONFIDENCE")
+
+    class Config:
+        env_file = ".env"
+
+
+class BreakoutStrategySettings(BaseSettings):
+    """Breakout strategy - volatility expansion / range breaks (equities + crypto)."""
+
+    enabled: bool = Field(True, alias="BREAKOUT_ENABLED")
+    lookback: int = Field(20, alias="BREAKOUT_LOOKBACK")
+    atr_multiplier: float = Field(2.0, alias="BREAKOUT_ATR_MULT")
+    volume_confirmation: bool = Field(True, alias="BREAKOUT_VOLUME_CONF")
+    allocation_weight: float = 0.10
+
+    class Config:
+        env_file = ".env"
+
+
+class TrendFollowingStrategySettings(BaseSettings):
+    """Trend following - long-term SMA crossover (multi-day horizon)."""
+
+    enabled: bool = Field(True, alias="TREND_FOLLOWING_ENABLED")
+    fast_sma: int = Field(50, alias="TREND_FAST_SMA")
+    slow_sma: int = Field(200, alias="TREND_SLOW_SMA")
+    allocation_weight: float = 0.10
+
+    class Config:
+        env_file = ".env"
+
+
+class PairsTradingStrategySettings(BaseSettings):
+    """Pairs trading - statistical arbitrage between correlated assets."""
+
+    enabled: bool = Field(True, alias="PAIRS_TRADING_ENABLED")
+    z_entry: float = Field(2.0, alias="PAIRS_Z_ENTRY")
+    z_exit: float = Field(0.5, alias="PAIRS_Z_EXIT")
+    correlation_min: float = Field(0.70, alias="PAIRS_CORRELATION_MIN")
+    allocation_weight: float = 0.10
+
+    class Config:
+        env_file = ".env"
+
+
+class VolatilityRegimeStrategySettings(BaseSettings):
+    """Volatility regime - adjusts exposure based on VIX level."""
+
+    enabled: bool = Field(True, alias="VOLATILITY_REGIME_ENABLED")
+    vix_low: float = Field(15.0, alias="VIX_LOW_THRESHOLD")
+    vix_high: float = Field(25.0, alias="VIX_HIGH_THRESHOLD")
+    allocation_weight: float = 0.05
 
     class Config:
         env_file = ".env"
@@ -293,12 +354,17 @@ class Settings(BaseSettings):
     # Trading parameters
     trading: TradingSettings = TradingSettings()
 
-    # Strategies
+    # Strategies (10 total — wider regime + asset coverage)
     momentum: MomentumStrategySettings = MomentumStrategySettings()
     mean_reversion: MeanReversionStrategySettings = MeanReversionStrategySettings()
     crypto_momentum: CryptoMomentumStrategySettings = CryptoMomentumStrategySettings()
     options_wheel: OptionsWheelStrategySettings = OptionsWheelStrategySettings()
     polymarket_strategy: PolymarketStrategySettings = PolymarketStrategySettings()
+    ensemble: EnsembleStrategySettings = EnsembleStrategySettings()
+    breakout: BreakoutStrategySettings = BreakoutStrategySettings()
+    trend_following: TrendFollowingStrategySettings = TrendFollowingStrategySettings()
+    pairs_trading: PairsTradingStrategySettings = PairsTradingStrategySettings()
+    volatility_regime: VolatilityRegimeStrategySettings = VolatilityRegimeStrategySettings()
 
     # System settings
     scheduler: SchedulerSettings = SchedulerSettings()
@@ -347,13 +413,24 @@ class Settings(BaseSettings):
         return self.mode == "live" and self.features.enable_live_trading
 
     def get_enabled_strategies(self) -> dict[str, bool]:
-        """Get dict of enabled strategies."""
+        """Get dict of enabled strategies across all asset classes + regimes."""
         return {
+            # Equities — trending
             "momentum": self.momentum.enabled,
+            "trend_following": self.trend_following.enabled,
+            "breakout": self.breakout.enabled,
+            # Equities — mean-reverting / market-neutral
             "mean_reversion": self.mean_reversion.enabled,
+            "pairs_trading": self.pairs_trading.enabled,
+            # Crypto
             "crypto_momentum": self.crypto_momentum.enabled,
+            # Options (income / sideways)
             "options_wheel": self.options_wheel.enabled,
+            # Prediction markets
             "polymarket": self.polymarket_strategy.enabled,
+            # Regime / meta strategies
+            "volatility_regime": self.volatility_regime.enabled,
+            "ensemble": self.ensemble.enabled,
         }
 
 
