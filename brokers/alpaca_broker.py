@@ -340,6 +340,45 @@ class AlpacaBroker(BaseBroker):
             logger.error(f"Failed to get order status: {e}")
             raise
 
+    async def get_recent_filled_orders(self, limit: int = 50) -> list:
+        """Get recent filled orders from Alpaca.
+
+        Returns a list of dicts (not dataclasses) with the fields the
+        dashboard needs: symbol, side, qty, entryPrice (filled avg),
+        filled_at, strategy, asset_class.
+        """
+        await self._rate_limiter.wait()
+        try:
+            from alpaca.trading.requests import GetOrdersRequest
+            from alpaca.trading.enums import QueryOrderStatus, OrderStatus as AlpacaOrderStatus
+
+            req = GetOrdersRequest(status=QueryOrderStatus.CLOSED, limit=limit)
+            orders = self.client.get_orders(filter=req)
+
+            results = []
+            for o in orders:
+                if o.status != AlpacaOrderStatus.FILLED:
+                    continue
+                if not o.filled_avg_price or not o.filled_qty:
+                    continue
+                side_str = "BUY" if o.side == AlpacaOrderSide.BUY else "SELL"
+                results.append({
+                    "id": str(o.id),
+                    "symbol": o.symbol,
+                    "side": side_str,
+                    "qty": float(o.filled_qty),
+                    "entryPrice": float(o.filled_avg_price),
+                    "exitPrice": 0.0,   # filled orders don't have an exit in Alpaca
+                    "pnl": 0.0,         # realized PnL requires pairing open/close; left 0
+                    "strategy": "manual",
+                    "date": o.filled_at.isoformat() if o.filled_at else "",
+                    "assetClass": str(getattr(o, "asset_class", "stock")),
+                })
+            return results
+        except Exception as e:
+            logger.error(f"Failed to get recent filled orders: {e}")
+            return []
+
     async def get_historical_bars(
         self,
         symbol: str,

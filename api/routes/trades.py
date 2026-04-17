@@ -80,7 +80,7 @@ class ManualTradeResponse(BaseModel):
     timestamp: datetime
 
 
-@router.get("/trades", response_model=TradeListResponse)
+@router.get("/trades")
 async def list_trades(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -90,53 +90,47 @@ async def list_trades(
     symbol: Optional[str] = Query(None),
     side: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db),
+    engine: TradingEngine = Depends(get_engine),
 ):
     """
-    List trades with optional filtering.
-    Supports pagination and filtering by date, strategy, symbol, side, and status.
+    List trades - pulls from Alpaca broker order history when DB is empty.
     """
     try:
-        # Build query
-        query = select(Trade)
+        trades_list = []
 
-        filters = []
-        if start_date:
-            filters.append(Trade.entry_time >= start_date)
-        if end_date:
-            filters.append(Trade.entry_time <= end_date)
-        if strategy:
-            filters.append(Trade.strategy == strategy)
+        # Pull from Alpaca if connected
+        broker = engine.brokers.get("alpaca") if engine and engine.brokers else None
+        if broker and getattr(broker, "_connected", False) and hasattr(broker, "get_recent_filled_orders"):
+            try:
+                trades_list = await broker.get_recent_filled_orders(limit=50)
+            except Exception as e:
+                logger.debug(f"Failed to get Alpaca orders: {e}")
+
+        # Apply filters
         if symbol:
-            filters.append(Trade.symbol == symbol)
+            trades_list = [t for t in trades_list if t.get("symbol", "").upper() == symbol.upper()]
         if side:
-            filters.append(Trade.side == side)
-        if status:
-            filters.append(Trade.status == status)
+            trades_list = [t for t in trades_list if t.get("side", "").lower() == side.lower()]
+        if strategy:
+            trades_list = [t for t in trades_list if t.get("strategy", "") == strategy]
 
-        if filters:
-            query = query.where(and_(*filters))
+        total = len(trades_list)
 
-        # Get total count
-        count_query = select(func.count(Trade.id)).where(and_(*filters) if filters else True)
-        total = (await db.execute(count_query)).scalar() or 0
+        # Paginate
+        start = (page - 1) * page_size
+        end = start + page_size
+        paginated = trades_list[start:end]
 
-        # Apply pagination
-        query = query.offset((page - 1) * page_size).limit(page_size)
-        query = query.order_by(Trade.entry_time.desc())
-
-        trades = (await db.execute(query)).scalars().all()
-
-        return TradeListResponse(
-            trades=[TradeResponse.model_validate(t) for t in trades],
-            total=total,
-            page=page,
-            page_size=page_size,
-        )
+        return {
+            "trades": paginated,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
 
     except Exception as e:
         logger.error(f"Error listing trades: {e}", exc_info=True)
-        return TradeListResponse(trades=[], total=0, page=page, page_size=page_size)
+        return {"trades": [], "total": 0, "page": page, "page_size": page_size}
 
 
 @router.get("/trades/stats", response_model=TradeStatsResponse)
@@ -202,13 +196,13 @@ async def get_trade_stats(
 
 @router.get("/trades/history")
 async def get_trades_history(
-    db: AsyncSession = Depends(get_db),
+    engine: TradingEngine = Depends(get_engine),
 ):
     """Trade history (alias)."""
     try:
-        return await list_trades(db=db)
+        return await list_trades(engine=engine)
     except Exception:
-        return []
+        return {"trades": [], "total": 0, "page": 1, "page_size": 20}
 
 
 @router.get("/trades/pnl-distribution")

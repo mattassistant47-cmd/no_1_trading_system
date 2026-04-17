@@ -338,6 +338,14 @@ async def get_dashboard_overview(
             except Exception:
                 open_positions = len(getattr(engine, 'open_positions', []))
 
+        # Recent trades from Alpaca order history
+        recent_trades = []
+        if broker and broker._connected and hasattr(broker, 'get_recent_filled_orders'):
+            try:
+                recent_trades = await broker.get_recent_filled_orders(limit=20)
+            except Exception as e:
+                logger.debug(f"Could not get recent trades: {e}")
+
         return {
             "portfolioValue": portfolio_value,
             "cash": cash,
@@ -348,12 +356,12 @@ async def get_dashboard_overview(
             "totalPnlPercentage": total_pnl_pct,
             "winRate": float(getattr(engine, 'win_rate', 0) or 0),
             "sharpeRatio": float(getattr(engine, 'sharpe_ratio', 0) or 0),
-            "totalTrades": 0,
+            "totalTrades": len(recent_trades),
             "openPositions": open_positions,
             "equityCurve": equity_curve,
             "assetAllocation": asset_allocation,
             "strategyPerformance": strategy_performance,
-            "recentTrades": [],
+            "recentTrades": recent_trades,
             "activeSignals": [],
             "activeStrategies": len(engine.strategies or {}),
             "timestamp": datetime.utcnow().isoformat(),
