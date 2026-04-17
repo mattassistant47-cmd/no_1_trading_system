@@ -296,21 +296,25 @@ async def get_dashboard_overview(
                 "cumulativePnl": total_pnl,
             }]
 
-        # Asset allocation
+        # Asset allocation — split long/short to avoid double-counting
         asset_allocation = [{"name": "Cash", "value": cash}]
         if broker and broker._connected and invested > 0:
             try:
                 positions = await broker.get_positions()
-                by_class = {}
+                long_value = 0.0
+                short_value = 0.0
                 for p in positions:
-                    ac = getattr(p, 'asset_class', 'Equity') or 'Equity'
-                    ac = ac.capitalize() if isinstance(ac, str) else 'Equity'
-                    val = abs(float(p.market_value or 0))
-                    by_class[ac] = by_class.get(ac, 0) + val
-                for name, val in by_class.items():
-                    asset_allocation.append({"name": name, "value": val})
+                    val = float(p.market_value or 0)
+                    if val > 0:
+                        long_value += val
+                    else:
+                        short_value += abs(val)
+                if long_value > 0:
+                    asset_allocation.append({"name": "Long", "value": long_value})
+                if short_value > 0:
+                    asset_allocation.append({"name": "Short", "value": short_value})
             except Exception:
-                asset_allocation.append({"name": "Equity", "value": invested})
+                asset_allocation.append({"name": "Invested", "value": invested})
 
         # Strategy performance
         strategy_performance = []

@@ -114,14 +114,16 @@ export default function Dashboard() {
         <KPICard
           label="Portfolio Value"
           value={`$${(portfolioValue || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
-          change={dailyPnlPercentage}
-          positive={isProfitable}
+          change={totalPnlPercentage}
+          changeLabel="all time"
+          positive={totalPnlPercentage >= 0}
           icon="TrendingUp"
         />
         <KPICard
           label="Daily P&L"
           value={`$${(dailyPnl || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`}
           change={dailyPnlPercentage}
+          changeLabel="today"
           positive={isProfitable}
           icon="DollarSign"
         />
@@ -129,13 +131,14 @@ export default function Dashboard() {
           label="Total Return"
           value={`${(totalPnlPercentage || 0).toFixed(2)}%`}
           change={totalPnlPercentage}
+          changeLabel="all time"
           positive={totalPnlPercentage >= 0}
           icon="PercentSquare"
         />
         <KPICard
           label="Sharpe Ratio"
           value={(sharpeRatio || 0).toFixed(2)}
-          change={sharpeRatio}
+          change={null}
           positive={sharpeRatio >= 1}
           icon="Activity"
         />

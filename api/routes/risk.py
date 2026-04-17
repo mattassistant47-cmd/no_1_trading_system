@@ -91,60 +91,94 @@ class RiskAlertListResponse(BaseModel):
 async def get_risk_overview(
     engine: TradingEngine = Depends(get_engine),
 ):
-    """Get real risk data from engine.risk_manager."""
+    """Get real risk data from Alpaca broker + RiskManager."""
     try:
-        risk_mgr = engine.risk_manager
+        broker = engine.brokers.get("alpaca") if engine.brokers else None
         portfolio_value = engine.portfolio_value or settings.trading.initial_capital
 
-        if risk_mgr and hasattr(risk_mgr, 'get_portfolio_risk'):
-            risk = await risk_mgr.get_portfolio_risk()
-            # Calculate drawdown
-            peak = getattr(risk_mgr, 'peak_equity', portfolio_value)
-            current = getattr(risk_mgr, 'current_equity', portfolio_value)
-            drawdown = ((peak - current) / peak * 100) if peak > 0 else 0.0
-            daily_loss = getattr(risk_mgr, 'daily_pnl', 0.0)
+        # Real exposure + drawdown from Alpaca
+        exposure_pct = 0.0
+        drawdown_pct = 0.0
+        daily_loss_dollars = 0.0
+        leverage_mult = 0.0
+        if broker and getattr(broker, '_connected', False):
+            try:
+                positions = await broker.get_positions()
+                total_abs = sum(abs(float(p.market_value or 0)) for p in positions)
+                exposure_pct = (total_abs / portfolio_value * 100) if portfolio_value else 0.0
+                leverage_mult = exposure_pct / 100.0
+            except Exception as e:
+                logger.debug(f"Failed to get positions for exposure: {e}")
+            try:
+                account = await broker.get_account()
+                # Use broker raw client for account fields
+                raw = getattr(broker, 'client', None)
+                if raw:
+                    try:
+                        ra = raw.get_account()
+                        current_equity = float(getattr(ra, 'equity', portfolio_value))
+                        last_equity = float(getattr(ra, 'last_equity', current_equity))
+                        daily_loss_dollars = last_equity - current_equity  # positive = loss
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"Failed to get account for daily loss: {e}")
 
-            cb = getattr(engine, 'circuit_breaker', None)
-            cb_status = "armed"
-            if cb is not None:
-                try:
-                    cb_status = "armed" if cb.can_trade() else "halted"
-                except Exception:
-                    cb_status = "armed"
+        # Drawdown from RiskManager if available
+        risk_mgr = engine.risk_manager
+        if risk_mgr and hasattr(risk_mgr, 'peak_equity'):
+            peak = float(getattr(risk_mgr, 'peak_equity', portfolio_value) or portfolio_value)
+            current = float(getattr(risk_mgr, 'current_equity', portfolio_value) or portfolio_value)
+            if peak > 0 and current < peak:
+                drawdown_pct = (peak - current) / peak * 100
 
-            exposure_pct = getattr(risk, 'gross_exposure', 0.0) / portfolio_value * 100 if portfolio_value else 0
-            return {
-                "var_95": 0.0,
-                "drawdown": drawdown,
-                "max_drawdown": getattr(risk_mgr, 'max_drawdown_pct', settings.trading.max_drawdown_pct),
-                "current_drawdown": drawdown,
-                "total_exposure": getattr(risk, 'gross_exposure', 0.0),
-                "exposure": exposure_pct,
-                "max_exposure": settings.trading.max_leverage * 100,
-                "leverage": getattr(risk, 'current_leverage', 0.0),
-                "daily_loss": daily_loss,
-                "max_daily_loss": getattr(risk_mgr, 'max_daily_loss_pct', settings.trading.max_daily_loss_pct),
-                "circuit_breaker_status": cb_status,
-                "risk_metrics": [],
-                "portfolio_heat": exposure_pct,
-                "alerts": [],
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-        else:
-            return {
-                "var_95": 0.0, "max_drawdown": 0.0, "current_drawdown": 0.0,
-                "total_exposure": 0.0, "leverage": 0.0,
-                "daily_loss": 0.0, "max_daily_loss": settings.trading.max_daily_loss_pct,
-                "circuit_breaker_status": "armed",
-                "risk_metrics": [], "portfolio_heat": 0.0, "alerts": [],
-                "timestamp": datetime.utcnow().isoformat(),
-            }
+        # Circuit breaker status
+        cb = getattr(engine, 'circuit_breaker', None)
+        cb_status = "armed"
+        if cb is not None:
+            try:
+                cb_status = "armed" if cb.can_trade() else "halted"
+            except Exception:
+                pass
+
+        # Limits in both percent and dollars
+        max_daily_loss_pct = float(settings.trading.max_daily_loss_pct)
+        max_daily_loss_dollars = portfolio_value * (max_daily_loss_pct / 100)
+        max_drawdown_pct = float(settings.trading.max_drawdown_pct)
+        max_exposure_pct = float(settings.trading.max_leverage * 100)
+
+        return {
+            "var_95": 0.0,
+            "drawdown": drawdown_pct,
+            "max_drawdown": max_drawdown_pct,
+            "current_drawdown": drawdown_pct,
+            "total_exposure": exposure_pct,
+            "exposure": exposure_pct,
+            "max_exposure": max_exposure_pct,
+            "leverage": leverage_mult,
+            "max_leverage": float(settings.trading.max_leverage),
+            "daily_loss": max(0.0, daily_loss_dollars),  # dollars lost today
+            "daily_loss_pct": (max(0.0, daily_loss_dollars) / portfolio_value * 100) if portfolio_value else 0.0,
+            "max_daily_loss": max_daily_loss_pct,
+            "max_daily_loss_dollars": max_daily_loss_dollars,
+            "portfolio_value": portfolio_value,
+            "circuit_breaker_status": cb_status,
+            "risk_metrics": [],
+            "portfolio_heat": exposure_pct,
+            "alerts": [],
+            "timestamp": datetime.utcnow().isoformat(),
+        }
     except Exception as e:
         logger.error(f"Risk overview error: {e}", exc_info=True)
         return {
-            "var_95": 0.0, "max_drawdown": 0.0, "current_drawdown": 0.0,
-            "total_exposure": 0.0, "leverage": 0.0,
-            "daily_loss": 0.0, "max_daily_loss": settings.trading.max_daily_loss_pct,
+            "var_95": 0.0, "drawdown": 0.0, "max_drawdown": settings.trading.max_drawdown_pct,
+            "current_drawdown": 0.0, "total_exposure": 0.0, "exposure": 0.0,
+            "max_exposure": settings.trading.max_leverage * 100,
+            "leverage": 0.0, "max_leverage": settings.trading.max_leverage,
+            "daily_loss": 0.0, "daily_loss_pct": 0.0,
+            "max_daily_loss": settings.trading.max_daily_loss_pct,
+            "max_daily_loss_dollars": settings.trading.initial_capital * (settings.trading.max_daily_loss_pct / 100),
+            "portfolio_value": settings.trading.initial_capital,
             "circuit_breaker_status": "armed",
             "risk_metrics": [], "portfolio_heat": 0.0, "alerts": [],
             "timestamp": datetime.utcnow().isoformat(),

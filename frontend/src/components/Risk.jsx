@@ -70,7 +70,8 @@ export default function Risk() {
     drawdown = 0,
     maxDrawdown = 0,
     dailyLoss = 0,
-    maxDailyLoss = 0,
+    maxDailyLoss = 0,            // percent (e.g. 2.0)
+    maxDailyLossDollars = 0,     // dollars (e.g. 2000)
     exposure = 0,
     maxExposure = 0,
     circuitBreakerStatus = 'armed',
@@ -135,7 +136,7 @@ export default function Risk() {
           <div className="text-sm text-muted mb-4">Daily Loss</div>
           <div className="text-center mb-4">
             <div className="text-3xl font-bold text-neon-red mb-2">${(dailyLoss || 0).toFixed(2)}</div>
-            <div className="text-xs text-muted">Max: ${maxDailyLoss || 0}</div>
+            <div className="text-xs text-muted">Max: ${(maxDailyLossDollars || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} ({(maxDailyLoss || 0).toFixed(1)}%)</div>
           </div>
           <div className="w-full bg-surface rounded-full h-3 overflow-hidden">
             <div
@@ -147,7 +148,7 @@ export default function Risk() {
                     ? 'bg-yellow-500'
                     : 'bg-neon-red'
               )}
-              style={{ width: `${(dailyLoss / maxDailyLoss) * 100}%` }}
+              style={{ width: `${maxDailyLossDollars > 0 ? Math.min(100, (dailyLoss / maxDailyLossDollars) * 100) : 0}%` }}
             />
           </div>
         </div>
@@ -182,12 +183,12 @@ export default function Risk() {
           <div>
             <div className="flex justify-between items-center mb-2">
               <span className="font-semibold">Daily Loss Limit</span>
-              <span className="text-sm text-muted">${(dailyLoss || 0).toFixed(2)} / ${maxDailyLoss || 0}</span>
+              <span className="text-sm text-muted">${(dailyLoss || 0).toFixed(2)} / ${(maxDailyLossDollars || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
             </div>
             <div className="h-2 bg-surface rounded-full overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-neon-green via-yellow-500 to-neon-red transition-all"
-                style={{ width: `${(dailyLoss / maxDailyLoss) * 100}%` }}
+                style={{ width: `${maxDailyLossDollars > 0 ? Math.min(100, (dailyLoss / maxDailyLossDollars) * 100) : 0}%` }}
               />
             </div>
           </div>

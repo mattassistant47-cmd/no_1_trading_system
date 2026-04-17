@@ -10,7 +10,7 @@
 - Dev: ports 8001 (backend), 8080 (frontend), 5433 (db). Project name: `trading-dev`
 - Prod: ports 8000 (backend), 80 (frontend), 5432 (db). Project name: `trading-prod`
 - VPN: WireGuard 10.8.0.1 (OCI) ↔ 10.8.0.2 (Mac Mini), port 51820
-- **Always stop dev before deploying prod**: `docker compose -p trading-dev ... down` → deploy prod → verify → restart dev. Both share `--project-directory .` so explicit `--project-name` is required.
+- **Always stop dev before deploying prod AND keep dev stopped after**: `docker compose -p trading-dev ... down` → deploy prod → verify prod health → **DO NOT restart dev** (leave dev offline to save OCI resources). Both share `--project-directory .` so explicit `--project-name` is required. Only start dev again when the user explicitly requests dev work.
 - Push to GitHub from OCI (SSH key works): `ssh oci "cd ~/trading-bot/code && git push origin main"`
 - Local `gh auth` has TLS cert issues — don't waste time debugging, use OCI for GitHub ops.
 

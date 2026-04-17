@@ -8,7 +8,7 @@ const iconMap = {
   Activity,
 }
 
-export default function KPICard({ label, value, change, positive, icon = 'TrendingUp' }) {
+export default function KPICard({ label, value, change, changeLabel = 'today', positive, icon = 'TrendingUp' }) {
   const Icon = iconMap[icon] || TrendingUp
 
   return (
@@ -37,7 +37,7 @@ export default function KPICard({ label, value, change, positive, icon = 'Trendi
           )}>
             {positive ? '+' : ''}{change.toFixed(2)}%
           </span>
-          <span className="text-xs text-muted">today</span>
+          <span className="text-xs text-muted">{changeLabel}</span>
         </div>
       )}
     </div>
