@@ -210,17 +210,41 @@ export default function Dashboard() {
         {/* Strategy Performance */}
         <div className="bg-card-bg rounded border border-surface p-6">
           <h3 className="text-lg font-semibold mb-4 text-neon-cyan">Strategy Performance</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={strategyPerformance}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis dataKey="name" stroke="#94a3b8" style={{ fontSize: '12px' }} />
-              <YAxis stroke="#94a3b8" style={{ fontSize: '12px' }} />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#111827', border: '1px solid #1e293b' }}
-              />
-              <Bar dataKey="return" fill="#00ff88" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          {strategyPerformance.length > 0 && strategyPerformance.some(s => (s.trades || 0) > 0) ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={strategyPerformance}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="name" stroke="#94a3b8" style={{ fontSize: '12px' }} />
+                <YAxis stroke="#94a3b8" style={{ fontSize: '12px' }} />
+                <Tooltip contentStyle={{ backgroundColor: '#111827', border: '1px solid #1e293b' }} />
+                <Bar dataKey="return" fill="#00ff88" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="space-y-3">
+              {strategyPerformance.length > 0 ? (
+                strategyPerformance.map((s, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-surface rounded border border-grid">
+                    <div>
+                      <div className="font-semibold text-bright">{s.name}</div>
+                      <div className="text-xs text-muted">{s.trades || 0} trades</div>
+                    </div>
+                    <div className="text-right">
+                      <div className={clsx('text-sm font-semibold', (s.return || 0) >= 0 ? 'text-neon-green' : 'text-neon-red')}>
+                        {((s.return || 0) * 100).toFixed(2)}%
+                      </div>
+                      <div className="text-xs text-muted">Sharpe {(s.sharpe || 0).toFixed(2)}</div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-12 text-muted">No strategy data yet</div>
+              )}
+              <div className="text-xs text-muted text-center pt-2">
+                Chart appears after strategies execute trades
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Active Signals */}

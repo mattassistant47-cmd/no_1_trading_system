@@ -194,10 +194,10 @@ class SchedulerSettings(BaseSettings):
     market_open_minute: int = Field(30, alias="MARKET_OPEN_MINUTE")
     market_close_hour: int = Field(16, alias="MARKET_CLOSE_HOUR")
     market_close_minute: int = Field(0, alias="MARKET_CLOSE_MINUTE")
-    strategy_check_interval_seconds: int = Field(300, alias="STRATEGY_CHECK_INTERVAL_SECONDS")
+    strategy_check_interval_seconds: int = Field(120, alias="STRATEGY_CHECK_INTERVAL_SECONDS")
     risk_check_interval_seconds: int = Field(60, alias="RISK_CHECK_INTERVAL_SECONDS")
     data_sync_interval_seconds: int = Field(60, alias="DATA_SYNC_INTERVAL_SECONDS")
-    portfolio_snapshot_interval_minutes: int = Field(5, alias="PORTFOLIO_SNAPSHOT_INTERVAL_MINUTES")
+    portfolio_snapshot_interval_minutes: int = Field(1, alias="PORTFOLIO_SNAPSHOT_INTERVAL_MINUTES")
     background_task_initial_delay_seconds: int = Field(5, alias="BACKGROUND_TASK_INITIAL_DELAY")
 
     class Config:

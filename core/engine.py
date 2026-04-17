@@ -549,14 +549,18 @@ class TradingEngine:
 
     async def _sync_market_data(self) -> None:
         """Fetch OHLCV data for configured symbols."""
-        symbols = list(settings.trading.equity_symbols)
+        equity_symbols = list(settings.trading.equity_symbols)
+        crypto_symbols = list(settings.trading.crypto_symbols)
 
         if not self.data_feed:
             logger.warning("Data feed not available - skipping market data sync")
             return
 
         synced = 0
-        for symbol in symbols:
+        failed = 0
+
+        # Equities from Alpaca
+        for symbol in equity_symbols:
             try:
                 df = await self.data_feed.get_ohlcv(
                     symbol=symbol,
@@ -566,10 +570,34 @@ class TradingEngine:
                 if df is not None and not df.empty:
                     self._market_data[symbol] = df
                     synced += 1
+                else:
+                    failed += 1
             except Exception as e:
-                logger.error(f"Data sync failed for {symbol}: {e}")
+                failed += 1
+                logger.debug(f"Data sync failed for {symbol}: {e}")
 
-        logger.debug(f"Market data synced for {synced}/{len(symbols)} symbols")
+        # Crypto from CoinGecko
+        for symbol in crypto_symbols:
+            try:
+                df = await self.data_feed.get_ohlcv(
+                    symbol=symbol,
+                    timeframe=settings.trading.default_timeframe,
+                    source="coingecko",
+                )
+                if df is not None and not df.empty:
+                    self._market_data[symbol] = df
+                    synced += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                failed += 1
+                logger.debug(f"Data sync failed for {symbol}: {e}")
+
+        total = len(equity_symbols) + len(crypto_symbols)
+        logger.info(
+            f"Market data sync: {synced}/{total} symbols cached ({failed} failed). "
+            f"Cache now has {len(self._market_data)} symbols."
+        )
 
         try:
             await event_bus.emit(Event(
@@ -595,11 +623,17 @@ class TradingEngine:
         if self.circuit_breaker:
             self.circuit_breaker.heartbeat()
 
+        total_signals = 0
+        checked_strategies = 0
+
         for name, strategy in self.strategies.items():
             if not isinstance(strategy, BaseStrategy):
                 continue
             if not strategy.enabled:
                 continue
+
+            checked_strategies += 1
+            strategy_signals = 0
 
             try:
                 # Determine symbols for this strategy
@@ -611,10 +645,12 @@ class TradingEngine:
                 else:
                     symbols = list(self._market_data.keys())
 
+                symbols_with_data = 0
                 for symbol in symbols:
                     df = self._market_data.get(symbol)
                     if df is None or df.empty:
                         continue
+                    symbols_with_data += 1
 
                     try:
                         signals = strategy.generate_signals(df)
@@ -623,10 +659,17 @@ class TradingEngine:
                         continue
 
                     for sig in signals:
+                        strategy_signals += 1
+                        total_signals += 1
                         try:
                             await self._process_signal(sig, name, symbol, df)
                         except Exception as e:
                             logger.error(f"Signal processing failed for {name}/{symbol}: {e}")
+
+                logger.info(
+                    f"Strategy '{name}': checked {symbols_with_data}/{len(symbols)} symbols, "
+                    f"generated {strategy_signals} signals"
+                )
 
             except Exception as e:
                 logger.error(f"Strategy {name} check failed: {e}", exc_info=True)
@@ -637,6 +680,12 @@ class TradingEngine:
                     severity="error",
                     strategy_name=name,
                 )
+
+        logger.info(
+            f"Strategy check complete: {checked_strategies} strategies, "
+            f"{total_signals} total signals, "
+            f"market_data has {len(self._market_data)} symbols cached"
+        )
 
     async def _process_signal(self, sig, strategy_name: str, symbol: str, df) -> None:
         """Convert a strategy Signal to a risk-checked broker order."""

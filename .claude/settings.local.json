@@ -77,7 +77,12 @@
       "Bash(scp tests/test_api.py tests/test_risk_real.py tests/test_settings.py tests/test_alpaca_broker.py oci:/home/ubuntu/trading-bot/code/tests/)",
       "Bash(scp tests/test_alpaca_broker.py oci:/home/ubuntu/trading-bot/code/tests/)",
       "Bash(npm install *)",
-      "Bash(npx playwright *)"
+      "Bash(npx playwright *)",
+      "mcp__playwright__browser_console_messages",
+      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/api/websocket.py\" oci:/home/ubuntu/trading-bot/code/api/websocket.py)",
+      "Bash(scp frontend/src/App.jsx frontend/src/hooks/useWebSocket.js oci:/home/ubuntu/trading-bot/code/frontend/src/)",
+      "Bash(scp frontend/src/App.jsx oci:/home/ubuntu/trading-bot/code/frontend/src/App.jsx)",
+      "Bash(scp frontend/src/hooks/useWebSocket.js oci:/home/ubuntu/trading-bot/code/frontend/src/hooks/useWebSocket.js)"
     ]
   }
 }

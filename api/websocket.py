@@ -159,7 +159,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             try:
                 # Wait for message with timeout
-                data = await asyncio.wait_for(websocket.receive_json(), timeout=30.0)
+                data = await asyncio.wait_for(websocket.receive_json(), timeout=60.0)
 
                 message_type = data.get("type", "").lower()
                 channel = data.get("channel", "")
@@ -205,34 +205,50 @@ async def websocket_endpoint(websocket: WebSocket):
 
             except asyncio.TimeoutError:
                 # Send heartbeat
-                await websocket.send_json(
-                    {
-                        "type": "heartbeat",
-                        "timestamp": datetime.utcnow().isoformat(),
-                    }
-                )
+                try:
+                    await websocket.send_json(
+                        {
+                            "type": "heartbeat",
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                    )
+                except Exception:
+                    break  # client disconnected
 
             except json.JSONDecodeError:
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "message": "Invalid JSON",
-                        "timestamp": datetime.utcnow().isoformat(),
-                    }
-                )
+                try:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Invalid JSON",
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                    )
+                except Exception:
+                    break
 
             except Exception as e:
-                logger.error(f"WebSocket message handling error: {e}", exc_info=True)
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "message": "Internal server error",
-                        "timestamp": datetime.utcnow().isoformat(),
-                    }
-                )
+                # If it's a disconnect, just exit loop cleanly
+                err_name = type(e).__name__
+                if "Disconnect" in err_name or "ConnectionClosed" in err_name or "Abnormal" in str(e):
+                    logger.debug(f"WebSocket disconnected: {err_name}")
+                    break
+                logger.warning(f"WebSocket message handling error: {e}")
+                try:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Internal server error",
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                    )
+                except Exception:
+                    break
 
     except Exception as e:
-        logger.error(f"WebSocket connection error: {e}", exc_info=True)
+        err_name = type(e).__name__
+        if "Disconnect" not in err_name and "ConnectionClosed" not in err_name:
+            logger.warning(f"WebSocket connection error: {err_name}: {e}")
 
     finally:
         manager.disconnect(websocket)

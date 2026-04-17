@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
-import { createContext, useState, useEffect } from 'react'
+import { createContext, useState, useEffect, useCallback } from 'react'
 import Sidebar from './components/Sidebar'
 import Dashboard from './components/Dashboard'
 import Positions from './components/Positions'
@@ -21,16 +21,18 @@ export default function App() {
     system: null,
   })
 
-  const handleWsMessage = (channel, data) => {
+  const handleWsMessage = useCallback((channel, data) => {
     setRealtimeData(prev => ({
       ...prev,
       [channel]: data
     }))
-  }
+  }, [])
 
-  useWebSocket('/ws', handleWsMessage, (connected) => {
+  const handleWsStatus = useCallback((connected) => {
     setWsConnected(connected)
-  })
+  }, [])
+
+  useWebSocket('/ws', handleWsMessage, handleWsStatus)
 
   return (
     <AppContext.Provider value={{ wsConnected, realtimeData }}>
