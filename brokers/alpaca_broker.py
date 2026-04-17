@@ -381,6 +381,48 @@ class AlpacaBroker(BaseBroker):
             logger.error(f"Failed to get recent filled orders: {e}")
             return []
 
+    async def is_asset_shortable(self, symbol: str) -> bool:
+        """Check whether Alpaca permits short-selling this symbol. Caches results."""
+        if not hasattr(self, "_shortable_cache"):
+            self._shortable_cache: Dict[str, bool] = {}
+        if symbol not in self._shortable_cache:
+            try:
+                await self._rate_limiter.wait()
+                asset = self.client.get_asset(symbol)
+                self._shortable_cache[symbol] = bool(
+                    getattr(asset, "shortable", True) and getattr(asset, "easy_to_borrow", True)
+                )
+            except Exception:
+                self._shortable_cache[symbol] = True  # Optimistic: let Alpaca reject if needed
+        return self._shortable_cache[symbol]
+
+    async def get_open_orders(self, symbol: Optional[str] = None) -> list:
+        """Return open (unfilled) orders, optionally filtered by symbol.
+
+        Each entry is a dict with id, symbol, side ('BUY'|'SELL'), qty.
+        """
+        await self._rate_limiter.wait()
+        try:
+            from alpaca.trading.requests import GetOrdersRequest
+            from alpaca.trading.enums import QueryOrderStatus
+
+            req = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500)
+            orders = self.client.get_orders(filter=req)
+            results = []
+            for o in orders:
+                if symbol and o.symbol != symbol:
+                    continue
+                results.append({
+                    "id": str(o.id),
+                    "symbol": o.symbol,
+                    "side": "BUY" if o.side == AlpacaOrderSide.BUY else "SELL",
+                    "qty": float(o.qty) if o.qty else 0.0,
+                })
+            return results
+        except Exception as e:
+            logger.warning(f"Failed to get open orders: {e}")
+            return []
+
     async def get_historical_bars(
         self,
         symbol: str,

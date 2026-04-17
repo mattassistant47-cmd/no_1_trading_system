@@ -153,14 +153,22 @@ class CoinGeckoDataFeed:
 
             df = df.set_index("timestamp")
             df = df[["open", "high", "low", "close", "volume"]]
-            df = df.fillna(method="ffill")
+            df = df.ffill()
 
             logger.debug(f"Retrieved {len(df)} OHLCV records for {coin_id}")
             return df
 
+        except httpx.HTTPStatusError as e:
+            # 429 rate-limit: back off and return empty so callers degrade gracefully
+            if e.response.status_code == 429:
+                logger.warning(f"CoinGecko rate-limited for {symbol}; backing off 60s")
+                await asyncio.sleep(60)
+                return pd.DataFrame()
+            logger.error(f"Failed to get OHLCV for {symbol}: {e}")
+            return pd.DataFrame()
         except Exception as e:
             logger.error(f"Failed to get OHLCV for {symbol}: {e}")
-            raise
+            return pd.DataFrame()
 
     async def get_price(
         self,
@@ -190,14 +198,14 @@ class CoinGeckoDataFeed:
 
             await self.rate_limiter.wait()
 
-            params = {"vs_currencies": vs}
+            params = {"ids": coin_id, "vs_currencies": vs}
             if include_market_cap:
                 params["include_market_cap"] = "true"
             if include_24h_vol:
                 params["include_24hr_vol"] = "true"
 
             response = await self.client.get(
-                f"/simple/price",
+                "/simple/price",
                 params=params,
             )
             response.raise_for_status()

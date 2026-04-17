@@ -58,7 +58,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
     ports:
       - "8000:8000"
-    command: ["python", "main.py", "--workers", "4"]
+    command: ["python", "main.py", "--workers", "1"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s

@@ -57,6 +57,7 @@ class TradingEngine:
         self._initial_capital: float = settings.trading.initial_capital
         self._open_positions: list = []
         self._market_data: Dict[str, any] = {}
+        self._buying_power: float = 0.0
 
         try:
             log_path = getattr(settings.logging, 'log_file_path', '/app/logs/trading.log')
@@ -234,6 +235,14 @@ class TradingEngine:
             if connected:
                 self.brokers["alpaca"] = broker
                 logger.info(f"Alpaca broker connected (Mode: {settings.mode})")
+                try:
+                    account = await broker.get_account()
+                    cash = float(getattr(account, "cash", 0) or 0)
+                    bp = float(getattr(account, "buying_power", cash) or cash)
+                    self._buying_power = bp
+                    logger.info(f"Seeded buying_power=${bp:,.2f} from broker account")
+                except Exception as e:
+                    logger.warning(f"Could not seed buying_power at startup: {e}")
             else:
                 logger.warning(
                     "Alpaca broker connection failed - continuing in degraded mode"
@@ -627,6 +636,9 @@ class TradingEngine:
 
     def _start_background_tasks(self):
         """Start periodic background tasks using asyncio."""
+        if getattr(self, "_background_tasks", None):
+            logger.warning("_start_background_tasks called on already-running engine — skipping")
+            return
         async def _periodic(name, coro_func, interval_seconds):
             """Run a coroutine periodically."""
             logger.info(f"Background task '{name}' started (every {interval_seconds}s)")
@@ -798,7 +810,7 @@ class TradingEngine:
                 event_id=str(uuid.uuid4()),
                 timestamp=datetime.utcnow().isoformat(),
                 source="engine",
-                data={"symbols_synced": synced, "total": len(symbols)},
+                data={"symbols_synced": synced, "total": total},
             ))
         except Exception:
             pass
@@ -911,6 +923,18 @@ class TradingEngine:
         if quantity <= 0:
             return
 
+        # For EXIT signals: use actual position size and correct direction
+        if sig.direction == Direction.EXIT:
+            held = next((p for p in self._open_positions if p.get("symbol") == symbol), None)
+            held_qty = float(held.get("quantity", 0.0)) if held else 0.0
+            if held_qty == 0:
+                return  # No position to exit
+            if held_qty < 0:
+                # Short position: close via BUY, not SELL
+                broker_side = OrderSide.BUY
+                risk_side = RiskOrderType.BUY
+            quantity = abs(held_qty)
+
         # Determine asset class for risk manager
         asset_class = AssetClass.EQUITY
         if "/" in symbol:
@@ -963,6 +987,76 @@ class TradingEngine:
         # Submit to broker
         broker = self.brokers.get("alpaca")
         if broker and isinstance(broker, BaseBroker) and broker.is_connected:
+            # Pre-flight: cancel opposite-side open orders on same symbol (wash-trade guard)
+            try:
+                get_open = getattr(broker, "get_open_orders", None)
+                if callable(get_open):
+                    opp_side = "SELL" if broker_side == OrderSide.BUY else "BUY"
+                    opens = await get_open(symbol=symbol)
+                    cancelled = False
+                    for o in opens:
+                        if o.get("side") == opp_side:
+                            await broker.cancel_order(o["id"])
+                            cancelled = True
+                            logger.info(
+                                f"Cancelled opposite {opp_side} order {o['id']} on {symbol} to avoid wash-trade"
+                            )
+                    # Alpaca cancel is async; give it a moment before resubmitting
+                    if cancelled:
+                        import asyncio as _asyncio
+                        await _asyncio.sleep(1.0)
+            except Exception as e:
+                logger.debug(f"Wash-trade guard skipped for {symbol}: {e}")
+
+            # Pre-flight: buying-power guard for new positions (BUY or SELL-short).
+            # Skip for EXIT signals — closing an existing position needs no margin.
+            if sig.direction != Direction.EXIT:
+                bp = self._buying_power
+                est_cost = quantity * current_price
+                logger.debug(f"BP guard {symbol} ({sig.direction.value}): bp=${bp:.2f}, est_cost=${est_cost:.2f}")
+                if bp <= 0:
+                    logger.info(f"Skip {symbol}: no buying power (${bp:.2f})")
+                    return
+                if est_cost > bp and current_price > 0:
+                    scaled_qty = max(0.0, (bp * 0.95) / current_price)
+                    if scaled_qty < 1.0 and "/" not in symbol:
+                        logger.info(
+                            f"Skip {symbol}: est ${est_cost:.2f} exceeds buying_power ${bp:.2f} (scaled qty <1 share)"
+                        )
+                        return
+                    logger.info(
+                        f"Scaling {symbol} qty {quantity:.4f} -> {scaled_qty:.4f} to fit buying_power ${bp:.2f}"
+                    )
+                    quantity = scaled_qty
+
+            # Alpaca rejects fractional short-sells; round equity SELLs to whole shares
+            if broker_side == OrderSide.SELL and "/" not in symbol:
+                whole_qty = int(quantity)
+                if whole_qty < 1:
+                    logger.info(
+                        f"Skip {symbol} SELL: fractional qty {quantity:.4f} not allowed for equity shorts"
+                    )
+                    return
+                quantity = float(whole_qty)
+                # Cap to held long position; verify shortability for new short positions
+                held = next((p for p in self._open_positions if p.get("symbol") == symbol), None)
+                held_qty = float(held.get("quantity", 0.0)) if held else 0.0
+                if held_qty > 0:
+                    capped = float(int(min(quantity, held_qty)))
+                    if capped < 1:
+                        logger.info(f"Skip {symbol} SELL: long position ({held_qty:.4f}) too small to sell")
+                        return
+                    quantity = capped
+                elif held_qty == 0:
+                    is_shortable_fn = getattr(broker, "is_asset_shortable", None)
+                    if callable(is_shortable_fn):
+                        try:
+                            if not await is_shortable_fn(symbol):
+                                logger.info(f"Skip {symbol} SELL: asset not shortable per Alpaca")
+                                return
+                        except Exception:
+                            pass
+
             try:
                 broker_order = await broker.submit_order(
                     symbol=symbol,
@@ -975,6 +1069,10 @@ class TradingEngine:
                     f"Order submitted: {broker_side.value} {quantity:.4f} {symbol} "
                     f"@ ~${current_price:.2f} (strategy: {strategy_name})"
                 )
+
+                # Decrement cached buying power immediately so subsequent signals in the same
+                # cycle don't submit orders that exceed real available capital
+                self._buying_power = max(0.0, self._buying_power - quantity * current_price)
 
                 # Emit order placed event
                 try:
@@ -1038,7 +1136,42 @@ class TradingEngine:
                     pass
 
             except Exception as e:
-                logger.error(f"Order submission failed for {symbol}: {e}")
+                # One-shot retry on wash-trade race: cancel still-pending opposite orders then resubmit
+                msg = str(e)
+                if "wash trade" in msg.lower() or "opposite side" in msg.lower():
+                    try:
+                        import asyncio as _asyncio
+                        get_open = getattr(broker, "get_open_orders", None)
+                        if callable(get_open):
+                            opp_side = "SELL" if broker_side == OrderSide.BUY else "BUY"
+                            for o in await get_open(symbol=symbol):
+                                if o.get("side") == opp_side:
+                                    await broker.cancel_order(o["id"])
+                        await _asyncio.sleep(1.5)
+                        broker_order = await broker.submit_order(
+                            symbol=symbol,
+                            qty=round(quantity, 4),
+                            side=broker_side,
+                            order_type=OrderType.MARKET,
+                        )
+                        logger.info(
+                            f"Order submitted (after wash-trade retry): {broker_side.value} {quantity:.4f} {symbol}"
+                        )
+                    except Exception as e2:
+                        logger.warning(f"Wash-trade retry failed for {symbol}: {e2}")
+                else:
+                    logger.error(f"Order submission failed for {symbol}: {e}")
+                    # If Alpaca reported actual buying_power in the rejection, update our cache
+                    try:
+                        import json as _json
+                        err_data = _json.loads(str(e)) if str(e).startswith("{") else {}
+                        if "buying_power" in err_data:
+                            actual_bp = float(err_data["buying_power"])
+                            if actual_bp < self._buying_power:
+                                logger.info(f"Updating _buying_power to ${actual_bp:.2f} (from Alpaca rejection)")
+                                self._buying_power = actual_bp
+                    except Exception:
+                        pass
         else:
             logger.info(
                 f"Paper signal (no broker): {broker_side.value} {quantity:.4f} {symbol} "
@@ -1127,6 +1260,9 @@ class TradingEngine:
                     total_value = account.balance
                     cash = account.cash
                     positions_value = account.equity - account.cash
+                    bp_val = float(getattr(account, "buying_power", cash) or cash)
+                    logger.debug(f"Snapshot: cash=${cash:.2f}, equity=${account.equity:.2f}, buying_power=${bp_val:.2f}")
+                    self._buying_power = bp_val
 
                     positions = await broker.get_positions()
                     num_positions = len(positions)
@@ -1243,10 +1379,6 @@ class TradingEngine:
         try:
             await self.initialize()
             self.running = True
-
-            if self.scheduler:
-                self.scheduler.start()
-                logger.info("Scheduler started")
 
             logger.info("Starting event bus listener...")
             event_bus_task = asyncio.create_task(event_bus.start_listening())
