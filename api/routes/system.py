@@ -60,6 +60,9 @@ class ConfigResponse(BaseModel):
     brokers_enabled: list[str]
     strategies_enabled: list[str]
     database: str
+    trading: dict = Field(default_factory=dict)
+    circuit_breaker: dict = Field(default_factory=dict)
+    scheduler: dict = Field(default_factory=dict)
     timestamp: datetime
 
 
@@ -215,7 +218,37 @@ async def get_system_config():
     """Get current configuration (sanitized, no secrets)."""
     try:
         from api.deps import get_settings as _get_settings
+        from config.settings import settings as _app_settings
         settings = await _get_settings()
+
+        trading_cfg = {
+            "initial_capital": _app_settings.trading.initial_capital,
+            "max_position_size_percent": _app_settings.trading.max_position_size_percent,
+            "max_portfolio_risk_percent": _app_settings.trading.max_portfolio_risk_percent,
+            "max_leverage": _app_settings.trading.max_leverage,
+            "max_positions": _app_settings.trading.max_positions,
+            "max_daily_loss_pct": _app_settings.trading.max_daily_loss_pct,
+            "max_drawdown_pct": _app_settings.trading.max_drawdown_pct,
+            "max_single_position_pct": _app_settings.trading.max_single_position_pct,
+            "kelly_fraction": _app_settings.trading.kelly_fraction,
+            "default_position_size_pct": _app_settings.trading.default_position_size_pct,
+            "default_timeframe": _app_settings.trading.default_timeframe,
+            "equity_symbols": list(_app_settings.trading.equity_symbols),
+            "crypto_symbols": list(_app_settings.trading.crypto_symbols),
+            "asset_class_limits": dict(_app_settings.trading.asset_class_limits),
+        }
+        circuit_breaker_cfg = {
+            "volatility_threshold_sigma": _app_settings.circuit_breaker.volatility_threshold_sigma,
+            "heartbeat_timeout_seconds": _app_settings.circuit_breaker.heartbeat_timeout_seconds,
+            "cooldown_minutes": _app_settings.circuit_breaker.cooldown_minutes,
+            "position_size_multipliers": dict(_app_settings.circuit_breaker.position_size_multipliers),
+        }
+        scheduler_cfg = {
+            "strategy_check_interval_seconds": _app_settings.scheduler.strategy_check_interval_seconds,
+            "risk_check_interval_seconds": _app_settings.scheduler.risk_check_interval_seconds,
+            "data_sync_interval_seconds": _app_settings.scheduler.data_sync_interval_seconds,
+            "portfolio_snapshot_interval_minutes": _app_settings.scheduler.portfolio_snapshot_interval_minutes,
+        }
 
         return ConfigResponse(
             environment=settings.get("environment", "production"),
@@ -231,6 +264,9 @@ async def get_system_config():
             brokers_enabled=settings.get("brokers_enabled", ["alpaca", "ibkr", "polymarket"]),
             strategies_enabled=settings.get("strategies_enabled", []),
             database=settings.get("database", "postgresql"),
+            trading=trading_cfg,
+            circuit_breaker=circuit_breaker_cfg,
+            scheduler=scheduler_cfg,
             timestamp=datetime.utcnow(),
         )
 
@@ -240,6 +276,7 @@ async def get_system_config():
             environment="production", debug=False, trading_mode="paper",
             api_version="1.0.0", features={}, brokers_enabled=[],
             strategies_enabled=[], database="postgresql",
+            trading={}, circuit_breaker={}, scheduler={},
             timestamp=datetime.utcnow(),
         )
 

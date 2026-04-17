@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db, get_engine
+from config.settings import settings
 from core.engine import TradingEngine
 from core.models import Trade
 
@@ -82,13 +83,14 @@ async def get_dashboard_summary(
     """
     try:
         # Get portfolio data from engine
-        portfolio_value = getattr(engine, 'portfolio_value', 100000.0)
-        cash = getattr(engine, 'cash', 100000.0)
+        initial_capital = settings.trading.initial_capital
+        portfolio_value = getattr(engine, 'portfolio_value', initial_capital)
+        cash = getattr(engine, 'cash', initial_capital)
         invested = portfolio_value - cash
         daily_pnl = getattr(engine, 'daily_pnl', 0.0)
         daily_pnl_pct = (daily_pnl / portfolio_value * 100) if portfolio_value > 0 else 0
         total_pnl = getattr(engine, 'total_pnl', 0.0)
-        initial_capital = getattr(engine, 'initial_capital', 100000.0)
+        initial_capital = getattr(engine, 'initial_capital', initial_capital)
         total_pnl_pct = (total_pnl / initial_capital * 100) if initial_capital > 0 else 0
 
         # Get trade statistics
@@ -118,8 +120,9 @@ async def get_dashboard_summary(
 
     except Exception as e:
         logger.error(f"Error fetching dashboard summary: {e}", exc_info=True)
+        initial_capital = settings.trading.initial_capital
         return DashboardSummary(
-            portfolio_value=100000.0, cash=100000.0, invested=0.0,
+            portfolio_value=initial_capital, cash=initial_capital, invested=0.0,
             daily_pnl=0.0, daily_pnl_percentage=0.0,
             total_pnl=0.0, total_pnl_percentage=0.0,
             win_rate=0.0, sharpe_ratio=0.0,
@@ -145,7 +148,8 @@ async def get_equity_curve(
         # This is placeholder logic
         data = []
         current_date = start_date
-        current_equity = 100000.0
+        initial_capital = settings.trading.initial_capital
+        current_equity = initial_capital
 
         while current_date <= end_date:
             import random
@@ -157,7 +161,7 @@ async def get_equity_curve(
                 EquityPoint(
                     timestamp=current_date,
                     equity=current_equity,
-                    cumulative_pnl=current_equity - 100000.0,
+                    cumulative_pnl=current_equity - initial_capital,
                 )
             )
 
@@ -184,7 +188,7 @@ async def get_asset_allocation(
     Get current asset allocation breakdown.
     """
     try:
-        portfolio_value = getattr(engine, 'portfolio_value', 100000.0)
+        portfolio_value = getattr(engine, 'portfolio_value', settings.trading.initial_capital)
         allocation_by_asset = {}
         allocation_by_symbol = []
 
@@ -241,7 +245,7 @@ async def get_dashboard_overview(
     try:
         # Portfolio data from Alpaca account
         broker = engine.brokers.get("alpaca")
-        portfolio_value = engine.portfolio_value or 100000.0
+        portfolio_value = engine.portfolio_value or settings.trading.initial_capital
         cash = engine.cash or portfolio_value
         daily_pnl = 0.0
 
@@ -263,7 +267,7 @@ async def get_dashboard_overview(
                 logger.debug(f"Could not get Alpaca account: {e}")
 
         invested = portfolio_value - cash
-        initial_capital = engine.initial_capital or 100000.0
+        initial_capital = engine.initial_capital or settings.trading.initial_capital
         total_pnl = portfolio_value - initial_capital
         total_pnl_pct = (total_pnl / initial_capital * 100) if initial_capital else 0.0
         daily_pnl_pct = (daily_pnl / portfolio_value * 100) if portfolio_value else 0.0
@@ -352,8 +356,9 @@ async def get_dashboard_overview(
         }
     except Exception as e:
         logger.error(f"Dashboard overview error: {e}", exc_info=True)
+        initial_capital = settings.trading.initial_capital
         return {
-            "portfolioValue": 100000.0, "cash": 100000.0, "invested": 0.0,
+            "portfolioValue": initial_capital, "cash": initial_capital, "invested": 0.0,
             "dailyPnl": 0.0, "dailyPnlPercentage": 0.0,
             "totalPnl": 0.0, "totalPnlPercentage": 0.0,
             "winRate": 0.0, "sharpeRatio": 0.0,

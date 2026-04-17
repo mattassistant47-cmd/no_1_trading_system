@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from api.deps import get_engine
+from config.settings import settings
 from core.engine import TradingEngine
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ async def get_risk_overview(
     """Get real risk data from engine.risk_manager."""
     try:
         risk_mgr = engine.risk_manager
-        portfolio_value = engine.portfolio_value or 100000.0
+        portfolio_value = engine.portfolio_value or settings.trading.initial_capital
 
         if risk_mgr and hasattr(risk_mgr, 'get_portfolio_risk'):
             risk = await risk_mgr.get_portfolio_risk()
@@ -111,17 +112,21 @@ async def get_risk_overview(
                 except Exception:
                     cb_status = "armed"
 
+            exposure_pct = getattr(risk, 'gross_exposure', 0.0) / portfolio_value * 100 if portfolio_value else 0
             return {
                 "var_95": 0.0,
-                "max_drawdown": drawdown,
+                "drawdown": drawdown,
+                "max_drawdown": getattr(risk_mgr, 'max_drawdown_pct', settings.trading.max_drawdown_pct),
                 "current_drawdown": drawdown,
                 "total_exposure": getattr(risk, 'gross_exposure', 0.0),
+                "exposure": exposure_pct,
+                "max_exposure": settings.trading.max_leverage * 100,
                 "leverage": getattr(risk, 'current_leverage', 0.0),
                 "daily_loss": daily_loss,
-                "max_daily_loss": getattr(risk_mgr, 'max_daily_loss_pct', 2.0),
+                "max_daily_loss": getattr(risk_mgr, 'max_daily_loss_pct', settings.trading.max_daily_loss_pct),
                 "circuit_breaker_status": cb_status,
                 "risk_metrics": [],
-                "portfolio_heat": getattr(risk, 'gross_exposure', 0.0) / portfolio_value * 100 if portfolio_value else 0,
+                "portfolio_heat": exposure_pct,
                 "alerts": [],
                 "timestamp": datetime.utcnow().isoformat(),
             }
@@ -129,7 +134,7 @@ async def get_risk_overview(
             return {
                 "var_95": 0.0, "max_drawdown": 0.0, "current_drawdown": 0.0,
                 "total_exposure": 0.0, "leverage": 0.0,
-                "daily_loss": 0.0, "max_daily_loss": 2.0,
+                "daily_loss": 0.0, "max_daily_loss": settings.trading.max_daily_loss_pct,
                 "circuit_breaker_status": "armed",
                 "risk_metrics": [], "portfolio_heat": 0.0, "alerts": [],
                 "timestamp": datetime.utcnow().isoformat(),
@@ -139,7 +144,7 @@ async def get_risk_overview(
         return {
             "var_95": 0.0, "max_drawdown": 0.0, "current_drawdown": 0.0,
             "total_exposure": 0.0, "leverage": 0.0,
-            "daily_loss": 0.0, "max_daily_loss": 2.0,
+            "daily_loss": 0.0, "max_daily_loss": settings.trading.max_daily_loss_pct,
             "circuit_breaker_status": "armed",
             "risk_metrics": [], "portfolio_heat": 0.0, "alerts": [],
             "timestamp": datetime.utcnow().isoformat(),
@@ -174,19 +179,19 @@ async def get_risk_limits(
             RiskLimit(
                 name="Max Leverage",
                 current_value=engine.leverage,
-                limit_value=3.0,
+                limit_value=settings.trading.max_leverage,
                 limit_type="leverage",
-                usage_percentage=(engine.leverage / 3.0 * 100),
-                status="warning" if engine.leverage > 2.5 else "ok",
+                usage_percentage=(engine.leverage / settings.trading.max_leverage * 100) if settings.trading.max_leverage > 0 else 0,
+                status="warning" if engine.leverage > (settings.trading.max_leverage * 0.83) else "ok",
                 description="Maximum portfolio leverage",
             ),
             RiskLimit(
                 name="Max Drawdown",
                 current_value=abs(engine.max_drawdown),
-                limit_value=25.0,
+                limit_value=settings.trading.max_drawdown_pct,
                 limit_type="drawdown",
-                usage_percentage=(abs(engine.max_drawdown) / 25.0 * 100),
-                status="violated" if abs(engine.max_drawdown) > 25 else "ok",
+                usage_percentage=(abs(engine.max_drawdown) / settings.trading.max_drawdown_pct * 100) if settings.trading.max_drawdown_pct > 0 else 0,
+                status="violated" if abs(engine.max_drawdown) > settings.trading.max_drawdown_pct else "ok",
                 description="Maximum drawdown from peak",
             ),
         ]

@@ -3,7 +3,7 @@ Production-grade settings management using Pydantic Settings.
 Loads configuration from .env file and environment variables.
 """
 
-from typing import Optional
+from typing import Optional, List, Dict
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings
 
@@ -86,6 +86,39 @@ class TradingSettings(BaseSettings):
     commission_per_trade: float = Field(0.0, alias="COMMISSION_PER_TRADE")
     slippage_percent: float = Field(0.0001, alias="SLIPPAGE_PERCENT")
 
+    # Symbol universes
+    equity_symbols: List[str] = Field(
+        default_factory=lambda: ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "SPY", "QQQ"],
+        alias="EQUITY_SYMBOLS",
+    )
+    crypto_symbols: List[str] = Field(
+        default_factory=lambda: ["BTC/USD", "ETH/USD"],
+        alias="CRYPTO_SYMBOLS",
+    )
+
+    # Position sizing & timeframe defaults
+    default_timeframe: str = Field("1h", alias="DEFAULT_TIMEFRAME")
+    default_position_size_pct: float = Field(0.02, alias="DEFAULT_POSITION_SIZE_PCT")
+    max_single_position_pct: float = Field(5.0, alias="MAX_SINGLE_POSITION_PCT")
+    kelly_fraction: float = Field(0.25, alias="KELLY_FRACTION")
+    max_position_size_dollars: float = Field(10000.0, alias="MAX_POSITION_SIZE_DOLLARS")
+    min_position_size_dollars: float = Field(1.0, alias="MIN_POSITION_SIZE_DOLLARS")
+
+    # Risk limits
+    max_positions: int = Field(30, alias="MAX_POSITIONS")
+    max_daily_loss_pct: float = Field(2.0, alias="MAX_DAILY_LOSS_PCT")
+    max_drawdown_pct: float = Field(25.0, alias="MAX_DRAWDOWN_PCT")
+
+    # Asset class allocation limits (fraction of portfolio)
+    asset_class_limits: Dict[str, float] = Field(
+        default_factory=lambda: {
+            "EQUITY": 0.50,
+            "CRYPTO": 0.20,
+            "OPTIONS": 0.20,
+            "PREDICTION_MARKET": 0.10,
+        }
+    )
+
     @validator("max_position_size_percent", "max_portfolio_risk_percent", "max_leverage")
     def validate_positive(cls, v):
         if v <= 0:
@@ -164,6 +197,29 @@ class SchedulerSettings(BaseSettings):
     strategy_check_interval_seconds: int = Field(300, alias="STRATEGY_CHECK_INTERVAL_SECONDS")
     risk_check_interval_seconds: int = Field(60, alias="RISK_CHECK_INTERVAL_SECONDS")
     data_sync_interval_seconds: int = Field(60, alias="DATA_SYNC_INTERVAL_SECONDS")
+    portfolio_snapshot_interval_minutes: int = Field(5, alias="PORTFOLIO_SNAPSHOT_INTERVAL_MINUTES")
+    background_task_initial_delay_seconds: int = Field(5, alias="BACKGROUND_TASK_INITIAL_DELAY")
+
+    class Config:
+        env_file = ".env"
+
+
+class CircuitBreakerSettings(BaseSettings):
+    """Circuit breaker risk control configuration."""
+
+    volatility_threshold_sigma: float = Field(3.0, alias="CIRCUIT_BREAKER_VOLATILITY_SIGMA")
+    heartbeat_timeout_seconds: int = Field(300, alias="CIRCUIT_BREAKER_HEARTBEAT_TIMEOUT")
+    cooldown_minutes: int = Field(60, alias="CIRCUIT_BREAKER_COOLDOWN_MINUTES")
+    volatility_min_samples: int = Field(20, alias="CIRCUIT_BREAKER_VOL_MIN_SAMPLES")
+    position_size_multipliers: Dict[str, float] = Field(
+        default_factory=lambda: {
+            "normal": 1.0,
+            "warning": 0.75,
+            "reduced": 0.5,
+            "halted": 0.0,
+            "liquidating": 0.0,
+        }
+    )
 
     class Config:
         env_file = ".env"
@@ -246,6 +302,7 @@ class Settings(BaseSettings):
 
     # System settings
     scheduler: SchedulerSettings = SchedulerSettings()
+    circuit_breaker: CircuitBreakerSettings = CircuitBreakerSettings()
     security: SecuritySettings = SecuritySettings()
     api: APISettings = APISettings()
     logging: LoggingSettings = LoggingSettings()

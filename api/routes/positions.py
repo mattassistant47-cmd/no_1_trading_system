@@ -12,6 +12,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db, get_engine
+from config.settings import settings
 from core.engine import TradingEngine
 from core.models import Position
 
@@ -64,7 +65,7 @@ async def get_positions(engine: TradingEngine = Depends(get_engine)):
             return {"positions": [], "total": 0, "total_unrealized_pnl": 0.0, "total_realized_pnl": 0.0}
 
         alpaca_positions = await broker.get_positions()
-        portfolio_value = engine.portfolio_value or 100000.0
+        portfolio_value = engine.portfolio_value or settings.trading.initial_capital
 
         positions_list = []
         total_unrealized = 0.0
@@ -116,7 +117,7 @@ async def get_exposure(engine: TradingEngine = Depends(get_engine)):
     """Get real exposure breakdown from Alpaca positions."""
     try:
         broker = engine.brokers.get("alpaca")
-        portfolio_value = engine.portfolio_value or 100000.0
+        portfolio_value = engine.portfolio_value or settings.trading.initial_capital
 
         if not broker or not broker._connected:
             return {

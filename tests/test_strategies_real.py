@@ -299,3 +299,80 @@ class TestBacktest:
         result = s.backtest(df, initial_capital=50000)
         assert isinstance(result, dict)
         assert "initial_capital" in result or "error" in result
+
+
+# ---------------------------------------------------------------------------
+# Additional signal/strategy edge cases (no pandas_ta required)
+# ---------------------------------------------------------------------------
+
+class TestSignalMetadata:
+    def test_metadata_preserved(self):
+        sig = Signal(
+            symbol="AAPL",
+            direction=Direction.LONG,
+            strength=0.5,
+            strategy_name="test",
+            metadata={"rsi": 25.0, "trend": "up"},
+        )
+        assert sig.metadata["rsi"] == 25.0
+        assert sig.metadata["trend"] == "up"
+
+    def test_metadata_mutable_after_create(self):
+        sig = Signal(symbol="X", direction=Direction.LONG, strength=0.5, strategy_name="t")
+        sig.metadata["foo"] = 42
+        assert sig.metadata["foo"] == 42
+
+
+class TestPerformanceMetricsFields:
+    def test_all_fields_present(self):
+        m = PerformanceMetrics()
+        # Expected fields exist with default zero values
+        assert hasattr(m, "win_rate")
+        assert hasattr(m, "sharpe_ratio")
+        assert hasattr(m, "max_drawdown")
+        assert hasattr(m, "trade_count")
+        assert hasattr(m, "total_return")
+        assert hasattr(m, "profit_factor")
+
+
+@pytest.mark.skipif(not HAS_MOMENTUM, reason="pandas_ta not installed")
+class TestMomentumExtra:
+    def test_weight_zero_allowed(self):
+        s = MultiTimeframeMomentum()
+        s.weight = 0.0
+        assert s.weight == 0.0
+
+    def test_weight_one_allowed(self):
+        s = MultiTimeframeMomentum()
+        s.weight = 1.0
+        assert s.weight == 1.0
+
+    def test_weight_negative_raises(self):
+        s = MultiTimeframeMomentum()
+        with pytest.raises(ValueError):
+            s.weight = -0.1
+
+    def test_enabled_default_true(self):
+        s = MultiTimeframeMomentum()
+        assert s.enabled is True
+
+    def test_reset_metrics_clears_signals(self):
+        s = MultiTimeframeMomentum()
+        s.signals_generated.append(
+            Signal(symbol="X", direction=Direction.LONG, strength=0.5, strategy_name="t")
+        )
+        s.reset_metrics()
+        assert len(s.signals_generated) == 0
+
+    def test_log_signal_accumulates(self):
+        s = MultiTimeframeMomentum()
+        sig = Signal(symbol="X", direction=Direction.LONG, strength=0.5, strategy_name="t")
+        s.log_signal(sig)
+        assert len(s.signals_generated) == 1
+
+    def test_position_size_with_high_risk(self):
+        s = MultiTimeframeMomentum()
+        size = s.calculate_position_size(capital=100_000, atr=2.0, risk_per_trade=0.05)
+        # Larger risk_per_trade should yield larger size
+        baseline = s.calculate_position_size(capital=100_000, atr=2.0, risk_per_trade=0.01)
+        assert size > baseline

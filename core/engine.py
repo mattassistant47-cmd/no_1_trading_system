@@ -359,26 +359,26 @@ class TradingEngine:
 
             self.risk_manager = RiskManager(
                 initial_equity=settings.trading.initial_capital,
-                max_drawdown_pct=10.0,
-                max_daily_loss_pct=2.0,
-                max_positions=30,
+                max_drawdown_pct=settings.trading.max_drawdown_pct,
+                max_daily_loss_pct=settings.trading.max_daily_loss_pct,
+                max_positions=settings.trading.max_positions,
                 max_leverage=settings.trading.max_leverage,
-                max_single_position_pct=settings.trading.max_position_size_percent * 100,
+                max_single_position_pct=settings.trading.max_single_position_pct,
                 max_loss_per_trade_pct=settings.trading.max_portfolio_risk_percent * 100,
             )
 
             self.position_sizer = PositionSizer(
-                kelly_fraction=0.25,
-                max_position_size=10000,
-                min_position_size=1,
+                kelly_fraction=settings.trading.kelly_fraction,
+                max_position_size=settings.trading.max_position_size_dollars,
+                min_position_size=settings.trading.min_position_size_dollars,
             )
 
             self.circuit_breaker = CircuitBreaker(
-                max_daily_loss_pct=2.0,
-                max_drawdown_pct=10.0,
-                volatility_threshold=3.0,
-                heartbeat_timeout_sec=300,
-                cooldown_minutes=60,
+                max_daily_loss_pct=settings.trading.max_daily_loss_pct,
+                max_drawdown_pct=settings.trading.max_drawdown_pct,
+                volatility_threshold=settings.circuit_breaker.volatility_threshold_sigma,
+                heartbeat_timeout_sec=settings.circuit_breaker.heartbeat_timeout_seconds,
+                cooldown_minutes=settings.circuit_breaker.cooldown_minutes,
                 auto_recovery=True,
             )
 
@@ -437,7 +437,7 @@ class TradingEngine:
         async def _periodic(name, coro_func, interval_seconds):
             """Run a coroutine periodically."""
             logger.info(f"Background task '{name}' started (every {interval_seconds}s)")
-            await asyncio.sleep(5)  # initial delay
+            await asyncio.sleep(settings.scheduler.background_task_initial_delay_seconds)  # initial delay
             while self.running:
                 try:
                     await coro_func()
@@ -466,7 +466,8 @@ class TradingEngine:
             self._background_tasks.append(task)
 
         # Portfolio snapshots
-        task = loop.create_task(_periodic("portfolio_snapshot", self._take_portfolio_snapshot, 300))
+        snapshot_interval = settings.scheduler.portfolio_snapshot_interval_minutes * 60
+        task = loop.create_task(_periodic("portfolio_snapshot", self._take_portfolio_snapshot, snapshot_interval))
         self._background_tasks.append(task)
 
         # Order fill checks
@@ -518,11 +519,11 @@ class TradingEngine:
         self.scheduler.add_job(
             self._take_portfolio_snapshot,
             trigger="interval",
-            minutes=5,
+            minutes=settings.scheduler.portfolio_snapshot_interval_minutes,
             id="portfolio_snapshot",
             replace_existing=True,
         )
-        logger.info("Portfolio snapshots scheduled every 5 minutes")
+        logger.info(f"Portfolio snapshots scheduled every {settings.scheduler.portfolio_snapshot_interval_minutes} minutes")
 
         # Order fill checks
         if self.order_executor:
@@ -548,7 +549,7 @@ class TradingEngine:
 
     async def _sync_market_data(self) -> None:
         """Fetch OHLCV data for configured symbols."""
-        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "SPY", "QQQ"]
+        symbols = list(settings.trading.equity_symbols)
 
         if not self.data_feed:
             logger.warning("Data feed not available - skipping market data sync")
@@ -559,7 +560,7 @@ class TradingEngine:
             try:
                 df = await self.data_feed.get_ohlcv(
                     symbol=symbol,
-                    timeframe="1h",
+                    timeframe=settings.trading.default_timeframe,
                     source="alpaca",
                 )
                 if df is not None and not df.empty:
@@ -604,9 +605,9 @@ class TradingEngine:
                 # Determine symbols for this strategy
                 asset_class = strategy.asset_class
                 if asset_class == "equities":
-                    symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "SPY", "QQQ"]
+                    symbols = list(settings.trading.equity_symbols)
                 elif asset_class == "crypto":
-                    symbols = ["BTC/USD", "ETH/USD"]
+                    symbols = list(settings.trading.crypto_symbols)
                 else:
                     symbols = list(self._market_data.keys())
 
@@ -663,7 +664,7 @@ class TradingEngine:
         if sig.position_size and sig.position_size > 0 and current_price > 0:
             quantity = sig.position_size / current_price
         else:
-            quantity = max(1.0, (self._cash * 0.02) / current_price) if current_price > 0 else 0
+            quantity = max(1.0, (self._cash * settings.trading.default_position_size_pct) / current_price) if current_price > 0 else 0
 
         if quantity <= 0:
             return

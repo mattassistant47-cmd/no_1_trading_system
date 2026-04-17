@@ -73,7 +73,11 @@
       "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/nginx.dev.conf\" oci:/home/ubuntu/trading-bot/code/nginx.dev.conf)",
       "mcp__playwright__browser_snapshot",
       "mcp__playwright__browser_take_screenshot",
-      "mcp__playwright__browser_wait_for"
+      "mcp__playwright__browser_wait_for",
+      "Bash(scp tests/test_api.py tests/test_risk_real.py tests/test_settings.py tests/test_alpaca_broker.py oci:/home/ubuntu/trading-bot/code/tests/)",
+      "Bash(scp tests/test_alpaca_broker.py oci:/home/ubuntu/trading-bot/code/tests/)",
+      "Bash(npm install *)",
+      "Bash(npx playwright *)"
     ]
   }
 }

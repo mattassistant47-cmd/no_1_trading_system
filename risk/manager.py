@@ -140,12 +140,17 @@ class RiskManager:
         self.max_sector_exposure_pct = max_sector_exposure_pct
         self.max_correlation_threshold = max_correlation_threshold
 
-        # Asset class allocation limits
+        # Asset class allocation limits (pulled from settings with sensible fallbacks)
+        try:
+            from config.settings import settings as _settings
+            _limits = dict(_settings.trading.asset_class_limits or {})
+        except Exception:
+            _limits = {}
         self.asset_class_limits = {
-            AssetClass.EQUITY: 0.50,
-            AssetClass.CRYPTO: 0.20,
-            AssetClass.OPTIONS: 0.20,
-            AssetClass.PREDICTION_MARKET: 0.10,
+            AssetClass.EQUITY: _limits.get("EQUITY", 0.50),
+            AssetClass.CRYPTO: _limits.get("CRYPTO", 0.20),
+            AssetClass.OPTIONS: _limits.get("OPTIONS", 0.20),
+            AssetClass.PREDICTION_MARKET: _limits.get("PREDICTION_MARKET", 0.10),
         }
 
         # State

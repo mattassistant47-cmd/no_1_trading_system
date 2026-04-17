@@ -67,12 +67,12 @@ export default function Risk() {
   }
 
   const {
-    drawdown = 5.2,
-    maxDrawdown = 15,
-    dailyLoss = 2.5,
-    maxDailyLoss = 10,
-    exposure = 65,
-    maxExposure = 100,
+    drawdown = 0,
+    maxDrawdown = 0,
+    dailyLoss = 0,
+    maxDailyLoss = 0,
+    exposure = 0,
+    maxExposure = 0,
     circuitBreakerStatus = 'armed',
     correlationMatrix = [],
     varMetrics = [],
