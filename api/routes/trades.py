@@ -90,33 +90,82 @@ async def list_trades(
     symbol: Optional[str] = Query(None),
     side: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    mode: Optional[str] = Query(None, description="paper or live"),
+    db: AsyncSession = Depends(get_db),
     engine: TradingEngine = Depends(get_engine),
 ):
     """
-    List trades - pulls from Alpaca broker order history when DB is empty.
+    List trades - reads from DB (source of truth) filtered by current mode.
+    Falls back to Alpaca order history if DB is empty.
     """
     try:
+        from config.settings import settings as _s
+        from core.models import Order as DBOrder, OrderStatus as DBOrderStatus
+
+        effective_mode = mode or _s.mode
+
         trades_list = []
 
-        # Pull from Alpaca if connected
-        broker = engine.brokers.get("alpaca") if engine and engine.brokers else None
-        if broker and getattr(broker, "_connected", False) and hasattr(broker, "get_recent_filled_orders"):
-            try:
-                trades_list = await broker.get_recent_filled_orders(limit=50)
-            except Exception as e:
-                logger.debug(f"Failed to get Alpaca orders: {e}")
+        # Read from DB first
+        try:
+            stmt = (
+                select(DBOrder)
+                .where(DBOrder.status == DBOrderStatus.FILLED)
+                .where(DBOrder.trading_mode == effective_mode)
+                .order_by(DBOrder.filled_at.desc().nullslast())
+            )
+            if symbol:
+                stmt = stmt.where(DBOrder.symbol == symbol.upper())
+            if strategy:
+                stmt = stmt.where(DBOrder.strategy_name == strategy)
+            if start_date:
+                stmt = stmt.where(DBOrder.filled_at >= start_date)
+            if end_date:
+                stmt = stmt.where(DBOrder.filled_at <= end_date)
 
-        # Apply filters
-        if symbol:
-            trades_list = [t for t in trades_list if t.get("symbol", "").upper() == symbol.upper()]
-        if side:
-            trades_list = [t for t in trades_list if t.get("side", "").lower() == side.lower()]
-        if strategy:
-            trades_list = [t for t in trades_list if t.get("strategy", "") == strategy]
+            result = await db.execute(stmt)
+            db_orders = result.scalars().all()
+
+            for o in db_orders:
+                side_raw = o.side.value if hasattr(o.side, "value") else str(o.side)
+                if side and side_raw.lower() != side.lower():
+                    continue
+                trades_list.append({
+                    "id": str(o.broker_order_id or o.id),
+                    "symbol": o.symbol,
+                    "side": side_raw.upper(),
+                    "qty": float(o.filled_quantity or 0),
+                    "entryPrice": float(o.filled_price or 0),
+                    "exitPrice": 0.0,
+                    "pnl": 0.0,
+                    "strategy": o.strategy_name or "external",
+                    "date": o.filled_at.isoformat() if o.filled_at else "",
+                    "mode": o.trading_mode or "paper",
+                })
+        except Exception as e:
+            logger.debug(f"DB trades read failed: {e}")
+
+        # Fallback to broker if DB empty
+        if not trades_list:
+            broker = engine.brokers.get("alpaca") if engine and engine.brokers else None
+            if broker and getattr(broker, "_connected", False) and hasattr(broker, "get_recent_filled_orders"):
+                try:
+                    broker_trades = await broker.get_recent_filled_orders(limit=50)
+                    for t in broker_trades:
+                        t["strategy"] = t.get("strategy") or "external"
+                        t["mode"] = effective_mode
+                        trades_list.append(t)
+                    # Apply filters to broker results
+                    if symbol:
+                        trades_list = [t for t in trades_list if t.get("symbol", "").upper() == symbol.upper()]
+                    if side:
+                        trades_list = [t for t in trades_list if t.get("side", "").lower() == side.lower()]
+                    if strategy:
+                        trades_list = [t for t in trades_list if t.get("strategy", "") == strategy]
+                except Exception as e:
+                    logger.debug(f"Broker fallback failed: {e}")
 
         total = len(trades_list)
-
-        # Paginate
         start = (page - 1) * page_size
         end = start + page_size
         paginated = trades_list[start:end]
@@ -126,6 +175,7 @@ async def list_trades(
             "total": total,
             "page": page,
             "page_size": page_size,
+            "mode": effective_mode,
         }
 
     except Exception as e:
@@ -196,11 +246,12 @@ async def get_trade_stats(
 
 @router.get("/trades/history")
 async def get_trades_history(
+    db: AsyncSession = Depends(get_db),
     engine: TradingEngine = Depends(get_engine),
 ):
-    """Trade history (alias)."""
+    """Trade history (alias for /trades)."""
     try:
-        return await list_trades(engine=engine)
+        return await list_trades(db=db, engine=engine)
     except Exception:
         return {"trades": [], "total": 0, "page": 1, "page_size": 20}
 

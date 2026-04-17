@@ -192,6 +192,7 @@ class OrderExecutor:
                         existing.updated_at = datetime.utcnow()
 
                         # Create trade record
+                        from config.settings import settings as _s
                         trade = DBTrade(
                             symbol=symbol,
                             trade_type=TradeType.LONG,
@@ -205,6 +206,7 @@ class OrderExecutor:
                             win=pnl > 0,
                             strategy_name=strategy_name,
                             broker_name=broker_name,
+                            trading_mode=_s.mode,
                             entry_time=existing.opened_at or datetime.utcnow(),
                             exit_time=datetime.utcnow(),
                         )

@@ -82,7 +82,9 @@
       "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/api/websocket.py\" oci:/home/ubuntu/trading-bot/code/api/websocket.py)",
       "Bash(scp frontend/src/App.jsx frontend/src/hooks/useWebSocket.js oci:/home/ubuntu/trading-bot/code/frontend/src/)",
       "Bash(scp frontend/src/App.jsx oci:/home/ubuntu/trading-bot/code/frontend/src/App.jsx)",
-      "Bash(scp frontend/src/hooks/useWebSocket.js oci:/home/ubuntu/trading-bot/code/frontend/src/hooks/useWebSocket.js)"
+      "Bash(scp frontend/src/hooks/useWebSocket.js oci:/home/ubuntu/trading-bot/code/frontend/src/hooks/useWebSocket.js)",
+      "Bash(scp \"/Users/mattassistant/Documents/Claude/Projects/no 1 trading bot/core/database.py\" oci:/home/ubuntu/trading-bot/code/core/database.py)",
+      "mcp__playwright__browser_evaluate"
     ]
   }
 }

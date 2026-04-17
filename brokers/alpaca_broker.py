@@ -364,14 +364,16 @@ class AlpacaBroker(BaseBroker):
                 side_str = "BUY" if o.side == AlpacaOrderSide.BUY else "SELL"
                 results.append({
                     "id": str(o.id),
+                    "broker_order_id": str(o.id),
                     "symbol": o.symbol,
                     "side": side_str,
                     "qty": float(o.filled_qty),
                     "entryPrice": float(o.filled_avg_price),
                     "exitPrice": 0.0,   # filled orders don't have an exit in Alpaca
                     "pnl": 0.0,         # realized PnL requires pairing open/close; left 0
-                    "strategy": "manual",
+                    "strategy": None,   # enriched by API layer from DB (was hardcoded "manual")
                     "date": o.filled_at.isoformat() if o.filled_at else "",
+                    "filled_at": o.filled_at,  # raw datetime for DB insertion
                     "assetClass": str(getattr(o, "asset_class", "stock")),
                 })
             return results

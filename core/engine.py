@@ -185,6 +185,12 @@ class TradingEngine:
             await self._initialize_order_executor()
             await self._setup_scheduler()
 
+            # Backfill Alpaca order history into DB
+            try:
+                await self._backfill_alpaca_orders()
+            except Exception as e:
+                logger.warning(f"Alpaca backfill failed: {e}")
+
             # Wire event bus subscribers
             event_bus.subscribe(EventType.SIGNAL_GENERATED, self._handle_signal_event)
             event_bus.subscribe(EventType.ORDER_FILLED, self._handle_fill_event)
@@ -431,6 +437,102 @@ class TradingEngine:
     # Keep backward compat - old name pointed at position_manager dict
     async def _initialize_position_manager(self) -> None:
         await self._initialize_data_feed()
+
+    async def _backfill_alpaca_orders(self) -> None:
+        """Backfill filled Alpaca orders into DB so historical trades are tracked.
+
+        External orders (made via Alpaca UI or before this system existed)
+        get tagged strategy_name='external'. System-placed orders are
+        already stored by _process_signal() so we skip those by broker_order_id.
+        """
+        broker = self.brokers.get("alpaca")
+        if not broker or not getattr(broker, "_connected", False):
+            logger.debug("Alpaca not connected - skipping backfill")
+            return
+        if not hasattr(broker, "get_recent_filled_orders"):
+            return
+
+        try:
+            alpaca_orders = await broker.get_recent_filled_orders(limit=500)
+        except Exception as e:
+            logger.warning(f"Could not fetch Alpaca orders for backfill: {e}")
+            return
+
+        if not alpaca_orders:
+            logger.debug("No Alpaca orders to backfill")
+            return
+
+        from sqlalchemy import select
+        from core.database import DatabaseManager
+        from core.models import (
+            Order as DBOrder,
+            OrderStatus as DBOrderStatus,
+            OrderSide as DBOrderSide,
+        )
+
+        inserted = 0
+        skipped = 0
+
+        SessionLocal = DatabaseManager._async_session_local
+        if SessionLocal is None:
+            logger.warning("DB session not available for backfill")
+            return
+
+        async with SessionLocal() as session:
+            for o in alpaca_orders:
+                broker_order_id = o.get("broker_order_id") or o.get("id")
+                if not broker_order_id:
+                    continue
+
+                # Skip if already in DB
+                existing = await session.execute(
+                    select(DBOrder).where(DBOrder.broker_order_id == str(broker_order_id))
+                )
+                if existing.scalar_one_or_none():
+                    skipped += 1
+                    continue
+
+                side_str = (o.get("side") or "BUY").upper()
+                side_enum = DBOrderSide.BUY if side_str == "BUY" else DBOrderSide.SELL
+
+                filled_at = o.get("filled_at")
+                if isinstance(filled_at, str):
+                    try:
+                        filled_at = datetime.fromisoformat(filled_at.replace("Z", "+00:00"))
+                    except Exception:
+                        filled_at = None
+
+                db_order = DBOrder(
+                    broker_order_id=str(broker_order_id),
+                    symbol=o.get("symbol") or "UNKNOWN",
+                    side=side_enum,
+                    order_type="market",
+                    quantity=float(o.get("qty") or 0),
+                    filled_quantity=float(o.get("qty") or 0),
+                    filled_price=float(o.get("entryPrice") or 0),
+                    price=float(o.get("entryPrice") or 0),
+                    status=DBOrderStatus.FILLED,
+                    strategy_name="external",
+                    broker_name="alpaca",
+                    trading_mode=settings.mode,
+                    filled_at=filled_at,
+                    submitted_at=filled_at,
+                )
+                session.add(db_order)
+                inserted += 1
+
+            if inserted > 0:
+                try:
+                    await session.commit()
+                except Exception as e:
+                    await session.rollback()
+                    logger.warning(f"Backfill commit failed: {e}")
+                    return
+
+        logger.info(
+            f"Alpaca order backfill: {inserted} inserted, {skipped} already present "
+            f"(mode={settings.mode})"
+        )
 
     def _start_background_tasks(self):
         """Start periodic background tasks using asyncio."""
@@ -810,6 +912,7 @@ class TradingEngine:
                             status=DBOrderStatus.SUBMITTED,
                             strategy_name=strategy_name,
                             broker_name="alpaca",
+                            trading_mode=settings.mode,
                             submitted_at=datetime.utcnow(),
                         )
                         session.add(db_order)

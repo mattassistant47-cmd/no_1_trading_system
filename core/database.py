@@ -69,11 +69,39 @@ class DatabaseManager:
         """Create all tables and initialize TimescaleDB hypertables."""
         engine = await cls.get_engine()
 
+        # Create tables in one transaction
         async with engine.begin() as conn:
-            # Create all tables
             await conn.run_sync(Base.metadata.create_all)
-            logger.info("All tables created successfully")
+        logger.info("All tables created successfully")
 
+        # Migrations in a SEPARATE transaction so they commit even if
+        # the TimescaleDB hypertable creation below aborts its transaction.
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(
+                    "ALTER TABLE orders ADD COLUMN IF NOT EXISTS trading_mode VARCHAR(10) DEFAULT 'paper'"
+                ))
+                await conn.execute(text(
+                    "ALTER TABLE trades ADD COLUMN IF NOT EXISTS trading_mode VARCHAR(10) DEFAULT 'paper'"
+                ))
+                await conn.execute(text(
+                    "UPDATE orders SET trading_mode='paper' WHERE trading_mode IS NULL"
+                ))
+                await conn.execute(text(
+                    "UPDATE trades SET trading_mode='paper' WHERE trading_mode IS NULL"
+                ))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_orders_tmode_filled ON orders(trading_mode, filled_at)"
+                ))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_trades_tmode ON trades(trading_mode)"
+                ))
+            logger.info("Migrations complete: trading_mode column committed on orders/trades")
+        except Exception as e:
+            logger.warning(f"Migration step failed: {e}")
+
+        # TimescaleDB extension + hypertables in another separate transaction
+        async with engine.begin() as conn:
             # Create TimescaleDB extension if not exists
             try:
                 await conn.execute(text("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE"))

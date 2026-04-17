@@ -106,6 +106,7 @@ class Order(Base):
     slippage = Column(Numeric(15, 2), default=0)
     strategy_name = Column(String(100), nullable=False, index=True)
     broker_name = Column(String(50), nullable=False)  # "alpaca", "ibkr", "polymarket"
+    trading_mode = Column(String(10), default="paper", index=True)  # "paper" or "live"
     extra_metadata = Column("metadata", JSONB, default={})
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, index=True)
     submitted_at = Column(DateTime(timezone=True), nullable=True)
@@ -117,6 +118,7 @@ class Order(Base):
         Index("idx_orders_symbol_status", "symbol", "status"),
         Index("idx_orders_strategy_created", "strategy_name", "created_at"),
         Index("idx_orders_broker_order_id", "broker_order_id"),
+        Index("idx_orders_tmode_filled", "trading_mode", "filled_at"),
     )
 
 
@@ -138,6 +140,7 @@ class Trade(Base):
     win = Column(Boolean, default=False)
     strategy_name = Column(String(100), nullable=False, index=True)
     broker_name = Column(String(50), nullable=False)
+    trading_mode = Column(String(10), default="paper", index=True)  # "paper" or "live"
     entry_order_id = Column(UUID(as_uuid=True), ForeignKey("orders.id"), nullable=True)
     exit_order_id = Column(UUID(as_uuid=True), ForeignKey("orders.id"), nullable=True)
     duration_seconds = Column(BigInteger, nullable=True)
@@ -155,6 +158,7 @@ class Trade(Base):
         Index("idx_trades_symbol_strategy", "symbol", "strategy_name"),
         Index("idx_trades_entry_time", "entry_time"),
         Index("idx_trades_win", "win"),
+        Index("idx_trades_tmode", "trading_mode"),
     )
 
 

@@ -338,13 +338,47 @@ async def get_dashboard_overview(
             except Exception:
                 open_positions = len(getattr(engine, 'open_positions', []))
 
-        # Recent trades from Alpaca order history
+        # Recent trades: prefer DB (has strategy + mode), fall back to Alpaca
         recent_trades = []
-        if broker and broker._connected and hasattr(broker, 'get_recent_filled_orders'):
+        try:
+            from core.models import Order as DBOrder, OrderStatus as DBOrderStatus
+            from sqlalchemy import select as _select
+            stmt = (
+                _select(DBOrder)
+                .where(DBOrder.status == DBOrderStatus.FILLED)
+                .where(DBOrder.trading_mode == settings.mode)
+                .order_by(DBOrder.filled_at.desc().nullslast())
+                .limit(20)
+            )
+            result = await db.execute(stmt)
+            db_orders = result.scalars().all()
+            for o in db_orders:
+                side_raw = o.side.value if hasattr(o.side, "value") else str(o.side)
+                recent_trades.append({
+                    "id": str(o.broker_order_id or o.id),
+                    "symbol": o.symbol,
+                    "side": side_raw.upper(),
+                    "qty": float(o.filled_quantity or 0),
+                    "entryPrice": float(o.filled_price or 0),
+                    "exitPrice": 0.0,
+                    "pnl": 0.0,
+                    "strategy": o.strategy_name or "external",
+                    "date": o.filled_at.isoformat() if o.filled_at else "",
+                    "mode": o.trading_mode or "paper",
+                })
+        except Exception as e:
+            logger.debug(f"DB recent trades fetch failed, falling back to broker: {e}")
+
+        # Fallback: if DB has nothing, query broker directly
+        if not recent_trades and broker and broker._connected and hasattr(broker, 'get_recent_filled_orders'):
             try:
-                recent_trades = await broker.get_recent_filled_orders(limit=20)
+                broker_trades = await broker.get_recent_filled_orders(limit=20)
+                for t in broker_trades:
+                    t["strategy"] = t.get("strategy") or "external"
+                    t["mode"] = settings.mode
+                    recent_trades.append(t)
             except Exception as e:
-                logger.debug(f"Could not get recent trades: {e}")
+                logger.debug(f"Broker fallback failed: {e}")
 
         return {
             "portfolioValue": portfolio_value,
